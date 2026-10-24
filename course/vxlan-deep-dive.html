@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VXLAN Deep Dive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --paper:#edf1f3; --panel:#fbfcfd; --sunk:#e3e9ed; --ink:#122029; --ink-2:#51616e; --rule:#cad4db; --grid:#dbe3e8;
+  --under:#44607e; --vni:#7343be; --inner:#087e62; --flow:#c75a0b; --pay:#1f6fd6; --anl:#bc376a; --drop:#c22c27; --warn:#a86a00; --muted:#7a8892;
+  --fd:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --fb:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --fm:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+    --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60; --warn:#e8b04a; --muted:#6f7f8a;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+  --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60; --warn:#e8b04a; --muted:#6f7f8a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--fb);font-size:14px;line-height:1.5;display:flex;flex-direction:column}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--flow);outline-offset:2px}
+.mono{font-family:var(--fm)}
+
+header{display:flex;flex-wrap:wrap;align-items:end;gap:10px 24px;padding:12px 16px 0}
+@media (min-width:1000px){header{padding:14px 28px 0}}
+.eyebrow{font:600 11px/1.2 var(--fm);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin:0 0 4px}
+h1{font-family:var(--fd);font-stretch:78%;font-weight:800;font-size:clamp(24px,3.4vw,36px);line-height:1;margin:0}
+nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+nav button{border:1px solid var(--rule);background:var(--panel);border-radius:8px;padding:7px 12px;cursor:pointer;font-weight:500;display:flex;gap:8px;align-items:center}
+nav button kbd{font:600 10px var(--fm);color:var(--ink-2);border:1px solid var(--rule);border-radius:4px;padding:0 4px}
+nav button[aria-selected="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+nav button[aria-selected="true"] kbd{color:var(--paper);border-color:var(--paper)}
+
+main{flex:1;min-height:0;padding:12px 16px 16px}
+@media (min-width:1000px){main{padding:12px 28px 18px}}
+section[role="tabpanel"]{height:100%}
+section[hidden]{display:none}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:8px}
+h2{font-family:var(--fd);font-stretch:85%;font-weight:700;font-size:19px;margin:0 0 6px;line-height:1.15}
+h3{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:15px;margin:0 0 4px}
+p{margin:0 0 8px}
+.sub{color:var(--ink-2)}
+
+/* ---------- tab 1: blind spot ---------- */
+.bs{display:grid;gap:12px;height:100%}
+@media (min-width:1000px){.bs{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr)}}
+.leftcol{display:flex;flex-direction:column;gap:10px;min-height:0}
+.diagram{padding:10px;display:flex;flex-direction:column;min-height:0;flex:1 1 auto}
+.diagram svg{width:100%;flex:1 1 auto;min-height:0;display:block}
+@media (max-width:999px){.diagram svg{flex:none;height:auto}}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font:500 11px var(--fm);color:var(--ink-2);padding:6px 4px 0}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.side{display:flex;flex-direction:column;gap:10px;min-height:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.seg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;flex:1}
+@media (max-width:640px){.seg{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.seg button{text-align:left;padding:7px 9px;border:1px solid var(--rule);background:var(--panel);border-radius:8px;cursor:pointer;display:grid;gap:1px}
+.seg button b{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:14px;line-height:1.15}
+.seg button span{font:500 10.5px/1.3 var(--fm);color:var(--ink-2)}
+.seg button[aria-checked="true"]{border-color:var(--ink);background:var(--sunk);box-shadow:inset 0 -3px 0 var(--ink)}
+.toggle{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--panel);cursor:pointer;font-weight:600}
+.toggle .sw{width:38px;height:22px;border-radius:11px;background:var(--rule);position:relative;transition:background .2s}
+.toggle .sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--panel);transition:left .2s}
+.toggle[aria-checked="true"] .sw{background:var(--vni)}
+.toggle[aria-checked="true"] .sw::after{left:19px}
+.toggle small{font:500 11px var(--fm);color:var(--ink-2)}
+
+.wire{padding:8px 12px}
+.bar{display:flex;height:26px;border-radius:5px;overflow:hidden;font:600 10.5px var(--fm);margin:6px 0 4px}
+.bar div{display:grid;place-items:center;color:#fff;border-right:1px solid var(--panel);transition:opacity .25s,filter .25s}
+.bar .o{background:var(--under)} .bar .v{background:var(--vni)} .bar .i{background:var(--inner)} .bar .p{background:var(--muted)}
+.bar.off .v,.bar.off .i,.bar.off .p{opacity:.28;filter:grayscale(1)}
+.barcap{display:flex;justify-content:space-between;font:500 10.5px var(--fm);color:var(--ink-2)}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{font:600 10.5px var(--fm);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2);text-align:left;padding:4px 6px;border-bottom:1px solid var(--rule)}
+td{padding:4px 6px;border-bottom:1px solid var(--grid);font-family:var(--fm);font-size:12px;vertical-align:top}
+td.l{font-family:var(--fb);color:var(--ink-2);font-size:12px;white-space:nowrap}
+.rec{padding:8px 12px}
+.rec td{padding:3px 6px}
+.rec td.v{font-weight:500}
+.o-c{color:var(--under)} .v-c{color:var(--vni)} .i-c{color:var(--inner)} .dim{color:var(--muted)}
+tr.fresh td{animation:fresh 2s ease-out}
+@keyframes fresh{from{background:color-mix(in srgb,var(--vni) 16%,transparent)}to{background:transparent}}
+.takeaway{padding:10px 12px;border-left:4px solid var(--vni);font-size:13.5px}
+.takeaway b{color:var(--vni)}
+.bar-cell{display:flex;align-items:center;gap:6px}
+.bar-cell i{display:block;height:8px;border-radius:2px;background:var(--under)}
+.on .bar-cell i{background:var(--vni)}
+
+/* ---------- tab 2: walkthrough ---------- */
+.frame{width:100%;height:100%;border:1px solid var(--rule);border-radius:8px;background:var(--panel)}
+
+/* ---------- tab 3: use cases ---------- */
+.uc{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-content:start}
+.tile{padding:12px;display:grid;gap:6px;align-content:start}
+.tile .q{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:16px;line-height:1.2}
+.verdicts{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.vd{border-radius:6px;padding:6px 8px;font-size:12px;line-height:1.35}
+.vd b{display:block;font:600 10px var(--fm);letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px}
+.vd.normal{background:var(--sunk);color:var(--ink-2)}
+.vd.symptom{background:color-mix(in srgb,var(--warn) 14%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.vd.symptom b{color:var(--warn)}
+.vd.cause{background:var(--vni);color:#fff}
+.vd.cause b{color:#fff}
+.meta{font:500 11px var(--fm);color:var(--ink-2)}
+.meta code{color:var(--ink)}
+
+/* ---------- tab 4: case ---------- */
+.case{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-content:start}
+.case .card{padding:12px 14px}
+.case ul,.case ol{margin:4px 0 0;padding-left:18px}
+.case li{margin:2px 0}
+.note{font-size:12px;color:var(--ink-2)}
+.scroll{overflow:auto;height:100%}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="eyebrow">Overlay visibility · Kentik</p>
+    <h1>VXLAN deep dive</h1>
+  </div>
+  <nav role="tablist" aria-label="Sections">
+    <button role="tab" id="t-blind" aria-controls="p-blind" aria-selected="true"><kbd>1</kbd>The blind spot</button>
+    <button role="tab" id="t-walk" aria-controls="p-walk" aria-selected="false"><kbd>2</kbd>Packet walkthrough</button>
+    <button role="tab" id="t-uses" aria-controls="p-uses" aria-selected="false"><kbd>3</kbd>Use cases</button>
+    <button role="tab" id="t-case" aria-controls="p-case" aria-selected="false"><kbd>4</kbd>Making the case</button>
+  </nav>
+</header>
+
+<main>
+<!-- ============ 1. blind spot ============ -->
+<section role="tabpanel" id="p-blind" aria-labelledby="t-blind">
+  <div class="bs">
+    <div class="leftcol">
+    <div class="card diagram">
+      <svg id="fab" viewBox="0 20 640 400" role="img" aria-label="Leaf-spine fabric with the selected conversation highlighted"></svg>
+      <div class="legend">
+        <span><i style="background:var(--under)"></i>underlay / outer header</span>
+        <span><i style="background:var(--vni)"></i>VXLAN · VNI</span>
+        <span><i style="background:var(--inner)"></i>original packet</span>
+        <span><i style="background:var(--pay)"></i>VRF PAYMENTS</span>
+        <span><i style="background:var(--anl)"></i>VRF ANALYTICS</span>
+      </div>
+    </div>
+    <div class="card rec" id="ttCard">
+      <h3>Top talkers on both spines, last 15 minutes <span class="note" style="font-weight:400">· illustrative</span></h3>
+      <table id="tt"></table>
+    </div>
+    </div>
+    <div class="side">
+      <div class="row">
+        <div class="seg" role="radiogroup" aria-label="Conversation" id="scn"></div>
+      </div>
+      <div class="row">
+        <button class="toggle" id="dec" role="switch" aria-checked="false"><span class="sw"></span>Kentik VXLAN decode <small id="decState">off</small></button>
+        <span class="sub" style="font-size:12.5px">Press <span class="mono">D</span> to flip</span>
+      </div>
+      <div class="card wire">
+        <h3>What spine-0x samples: one packet, 128 bytes of header</h3>
+        <div class="bar off" id="bar">
+          <div class="o" style="flex:14">Eth</div><div class="o" style="flex:20">IP</div><div class="o" style="flex:8">UDP</div>
+          <div class="v" style="flex:8">VXLAN</div>
+          <div class="i" style="flex:14">Eth</div><div class="i" style="flex:20">IP</div><div class="i" style="flex:20">TCP</div><div class="p" style="flex:24">data</div>
+        </div>
+        <div class="barcap"><span>outer: VTEP → VTEP, UDP 4789</span><span id="barNote">a VXLAN-unaware collector stops here</span></div>
+      </div>
+      <div class="card rec">
+        <h3 id="recTitle">The flow record</h3>
+        <table id="rec"></table>
+      </div>
+      <div class="card takeaway" id="take"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. walkthrough ============ -->
+<section role="tabpanel" id="p-walk" aria-labelledby="t-walk" hidden>
+  <iframe class="frame" title="VXLAN fabric walkthrough" data-src="vxlan-fabric-walkthrough.html"></iframe>
+</section>
+
+<!-- ============ 3. use cases ============ -->
+<section role="tabpanel" id="p-uses" aria-labelledby="t-uses" hidden>
+  <div class="scroll">
+    <p class="sub" style="max-width:90ch">Each question below is something a fabric team, a security team or an app owner asks about the data center. The left verdict is what a collector that reads only the outer header can say about the spines. The right is with Kentik's VXLAN decode. Every row is reproducible with the lab: the inject to turn on and the query to run are underneath.</p>
+    <div class="uc" id="uc"></div>
+  </div>
+</section>
+
+<!-- ============ 4. making the case ============ -->
+<section role="tabpanel" id="p-case" aria-labelledby="t-case" hidden>
+  <div class="scroll">
+  <div class="case">
+    <div class="card">
+      <h2>The hypothesis</h2>
+      <p>Most data centers built in the last decade run an EVPN-VXLAN fabric. In those fabrics, every link between leaves and spines carries tunnels, so the conversations on them are hidden from any tool that reads only outer headers. If a customer exports sFlow from their fabric, Kentik can restore those conversations, and that answers questions the network team can't answer today.</p>
+      <p>We think this is valuable. The point of this section is to be able to explain it, demo it and test it with a customer before we lead with it.</p>
+    </div>
+    <div class="card">
+      <h2>Why sFlow, and only sFlow</h2>
+      <p>sFlow copies the first bytes of the raw packet, so the VXLAN header and the whole inner packet ride along in every sample. NetFlow and IPFIX build a record from a flow cache keyed on the headers the switch routes on. On a spine, that's the outer header, and the inner one is gone before anything is exported.</p>
+      <p>Per the Kentik KB, VXLAN decode requires sFlow, reads the first 128 to 256 bytes of each sampled packet, and supports VXLAN only (GRE/NVGRE and GENEVE are listed as future).</p>
+    </div>
+    <div class="card">
+      <h2>Two ways Kentik decodes it</h2>
+      <p>The device's type in Kentik picks the mode:</p>
+      <ul>
+        <li><b>sFlow Tunnel Decode</b>: inner IPs and ports become the normal Source/Destination dimensions. VNI and VTEP go in VXLAN dimensions. Existing dashboards, filters and alerts work on spine traffic unchanged.</li>
+        <li><b>VXLAN</b>: inner fields go into VXLAN dimensions (<span class="mono">VXLAN VNI 0/1 IP Address</span>, <span class="mono">Port</span>, <span class="mono">Protocol</span>, <span class="mono">VXLAN VNI 0/1</span>, <span class="mono">VXLAN VTEP 0/1 IP Address</span>), stored as custom fields. Good for showing outer and inner side by side.</li>
+      </ul>
+      <p class="note">Source: kb.kentik.com/docs/using-vxlan and /device-specific-dimensions.</p>
+    </div>
+    <div class="card">
+      <h2>Who cares</h2>
+      <ul>
+        <li><b>Data center network team</b>: which tenant, app or host is filling a spine; why ECMP is uneven; capacity per VRF.</li>
+        <li><b>Security and segmentation</b>: proof that VRFs stay isolated, and an alert when two tenants start talking across the fabric.</li>
+        <li><b>App owners</b>: the real path and volume of their east-west dependencies (web → db, ETL → lake).</li>
+        <li><b>Edge and NOC</b>: following an internet customer or a DDoS from the border into the fabric to the server.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Qualify it with a customer</h2>
+      <ol>
+        <li>Do you run EVPN-VXLAN? Which vendor and how many leaves and spines?</li>
+        <li>Do the fabric switches export sFlow today, or only NetFlow/IPFIX?</li>
+        <li>Is sFlow enabled on the spines and leaf uplinks, not just server ports? What header length?</li>
+        <li>How do VNIs map to tenants or VRFs? Is that in a source of truth we can import?</li>
+        <li>What's the question you can't answer about the fabric today?</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h2>Prove it on their data</h2>
+      <ol>
+        <li>Pick two spines and one leaf pair. Confirm sFlow with 128-byte headers reaches Kentik.</li>
+        <li>Set those devices to sFlow Tunnel Decode (or VXLAN for the side-by-side).</li>
+        <li>Run "who is using this spine" before and after. Screenshot both.</li>
+        <li>Map VNIs to tenant names with a custom dimension.</li>
+        <li>Pick one of their real questions from the qualify list and answer it live.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h2>What it can't do</h2>
+      <ul>
+        <li>No latency, loss or jitter. Flow counts traffic; it doesn't time it.</li>
+        <li>Nothing inside encrypted tunnels (IPsec, SD-WAN, TLS payloads).</li>
+        <li>No VM-to-VM traffic that never leaves a host.</li>
+        <li>Sampling misses some small flows. 1:4096 or more is common in fabrics.</li>
+        <li>Summing leaves and spines counts each packet more than once. Pick one tier for totals.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Confirm with the Kentik SE team</h2>
+      <ul>
+        <li>Licensing or flow-rate impact of decoded devices.</li>
+        <li>Whether custom dimension populators can match on VNI directly.</li>
+        <li>Whether geo/ASN enrichment applies to promoted inner IPs in Tunnel Decode mode.</li>
+        <li>Exact location of the device Type setting in the current portal.</li>
+      </ul>
+    </div>
+  </div>
+  </div>
+</section>
+</main>
+
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const $=id=>document.getElementById(id);
+
+/* ---------------- tabs ---------------- */
+const tabs=[...document.querySelectorAll('[role="tab"]')];
+const names=['blind','walk','uses','case'];
+function show(name){
+  tabs.forEach(t=>{
+    const on=t.id==='t-'+name;
+    t.setAttribute('aria-selected',on);
+    const p=$(t.getAttribute('aria-controls'));
+    p.hidden=!on;
+    if(on){const f=p.querySelector('iframe[data-src]');if(f&&!f.src)f.src=f.dataset.src;}
+  });
+  if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+}
+tabs.forEach(t=>t.addEventListener('click',()=>show(t.id.slice(2))));
+document.addEventListener('keydown',e=>{
+  if(e.target.closest('input,textarea')||e.metaKey||e.ctrlKey||e.altKey)return;
+  const n=parseInt(e.key,10);
+  if(n>=1&&n<=names.length){show(names[n-1]);return;}
+  const cur=names.indexOf((tabs.find(t=>t.getAttribute('aria-selected')==='true')||tabs[0]).id.slice(2));
+  if(e.key==='ArrowRight')show(names[(cur+1)%names.length]);
+  else if(e.key==='ArrowLeft')show(names[(cur+names.length-1)%names.length]);
+  else if((e.key==='d'||e.key==='D')&&cur===0)setDecode(!decode);
+});
+show(names.includes(location.hash.slice(1))?location.hash.slice(1):'blind');
+
+/* ---------------- fabric diagram ---------------- */
+const P={
+  s1:[230,50],s2:[410,50],
+  bl:[80,190],l1:[240,190],l2:[400,190],l3:[560,190],
+  inet:[80,340],web1:[200,330],db2:[280,330],web2:[360,330],bk:[440,330],db1:[520,330],etl2:[600,330]
+};
+const BOX={spine:[110,38],leaf:[120,46],host:[72,30]};
+const DEV={
+  s1:{t:'spine',l:'spine-01',s:'10.0.0.1'},s2:{t:'spine',l:'spine-02',s:'10.0.0.2'},
+  bl:{t:'leaf',l:'border-leaf',s:'VTEP .14'},l1:{t:'leaf',l:'leaf-01',s:'VTEP .11'},l2:{t:'leaf',l:'leaf-02',s:'VTEP .12'},l3:{t:'leaf',l:'leaf-03',s:'VTEP .13'},
+  inet:{t:'host',l:'internet',s:'via fw-edge',c:'muted',up:'bl'},
+  web1:{t:'host',l:'web-01',s:'10.10.1.21',c:'pay',up:'l1'},db2:{t:'host',l:'db-02',s:'10.10.2.46',c:'pay',up:'l1'},
+  web2:{t:'host',l:'web-02',s:'10.10.1.22',c:'pay',up:'l2'},bk:{t:'host',l:'backup-01',s:'10.10.5.50',c:'pay',up:'l2'},
+  db1:{t:'host',l:'db-01',s:'10.10.2.45',c:'pay',up:'l3'},etl2:{t:'host',l:'etl-02',s:'10.20.3.31',c:'anl',up:'l3'}
+};
+const svg=$('fab');
+function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);(parent||svg).appendChild(e);return e;}
+const gLinks=el('g',{}),gPath=el('g',{}),gBoxes=el('g',{});
+const linkEls={};
+function addLink(a,b){
+  const [x1,y1]=P[a],[x2,y2]=P[b];
+  linkEls[a+'-'+b]=el('line',{x1,y1,x2,y2,stroke:'var(--rule)','stroke-width':1.5},gLinks);
+}
+['bl','l1','l2','l3'].forEach(l=>['s1','s2'].forEach(s=>addLink(l,s)));
+Object.keys(DEV).filter(k=>DEV[k].up).forEach(h=>addLink(h,DEV[h].up));
+for(const k in DEV){
+  const d=DEV[k],[w,h]=BOX[d.t],[x,y]=P[k];
+  const g=el('g',{id:'n-'+k},gBoxes);
+  const fill=d.t==='host'?'var(--panel)':'var(--sunk)';
+  const stroke=d.c?`var(--${d.c})`:'var(--under)';
+  el('rect',{x:x-w/2,y:y-h/2,width:w,height:h,rx:7,fill,stroke,'stroke-width':d.t==='host'?1.2:1},g);
+  el('text',{x,y:y-(d.t==='host'?1:3),'text-anchor':'middle','font-family':'var(--fd)','font-weight':700,'font-size':d.t==='host'?12:14,fill:'var(--ink)'},g).textContent=d.l;
+  el('text',{x,y:y+(d.t==='host'?11:13),'text-anchor':'middle','font-family':'var(--fm)','font-size':9.5,fill:'var(--ink-2)'},g).textContent=d.s;
+}
+el('text',{x:320,y:404,'text-anchor':'middle','font-family':'var(--fm)','font-size':10,fill:'var(--ink-2)'}).textContent='Spines route on the outer header only. Every leaf-to-leaf link carries VXLAN on UDP 4789.';
+
+/* ---------------- scenarios (values match `python3 -m vxlanlab paths`) ---------------- */
+const SC={
+  db:{label:'Web to database',sub:'web-01 → db-01',hops:['web1','l1','s1','l3','db1'],
+      outer:['10.255.0.11','10.255.0.13','50706','4789','UDP'],vni:50010,vniKind:'L3 VNI · VRF PAYMENTS',vrf:'pay',
+      inner:['10.10.1.21','10.10.2.45','39474','5432','TCP'],app:'PostgreSQL',
+      off:'leaf-01 is sending something to leaf-03. That is all the spine can tell you.',
+      on:'web-01 is querying the payments database on db-01, in VRF <b>PAYMENTS</b>. Same sample, read all the way down.'},
+  bk:{label:'Hot spine',sub:'db-01 → backup-01',hops:['db1','l3','s1','l2','bk'],
+      outer:['10.255.0.13','10.255.0.12','49908','4789','UDP'],vni:50010,vniKind:'L3 VNI · VRF PAYMENTS',vrf:'pay',
+      inner:['10.10.2.45','10.10.5.50','51103','10566','TCP'],app:'backup stream, one session',
+      off:'spine-01 is running hot with leaf-03 → leaf-02 traffic. Which of the hundreds of conversations between them? No way to say.',
+      on:'One backup session, <b>db-01 → backup-01</b>, is 2.5 Gbps. ECMP can\'t split one 5-tuple, so it all lands on spine-01. Call the backup team.'},
+  leak:{label:'Route leak',sub:'web-01 → etl-02',hops:['web1','l1','s2','l3','etl2'],
+      outer:['10.255.0.11','10.255.0.13','55743','4789','UDP'],vni:50020,vniKind:'L3 VNI · VRF ANALYTICS',vrf:'anl',
+      inner:['10.10.1.21','10.20.3.31','37430','9092','TCP'],app:'Kafka',
+      off:'Looks exactly like the web-to-database traffic: leaf-01 to leaf-03 on UDP 4789. Nothing looks wrong.',
+      on:'A <b>PAYMENTS</b> server is reaching <b>ANALYTICS</b> Kafka across the fabric, in VNI 50020. Segmentation has a hole.'},
+  cust:{label:'Internet customer',sub:'203.0.113.111 → web-01',hops:['inet','bl','s1','l1','web1'],
+      outer:['10.255.0.14','10.255.0.11','56015','4789','UDP'],vni:50010,vniKind:'L3 VNI · VRF PAYMENTS',vrf:'pay',
+      inner:['203.0.113.111','10.10.1.21','39879','443','TCP'],app:'HTTPS, after NAT at fw-edge',
+      off:'border-leaf talking to leaf-01. The customer, their ASN and their country are invisible inside the fabric.',
+      on:'A real customer IP, <b>203.0.113.111</b>, followed past the firewall onto spine-01 and down to web-01. Geo and ASN enrichment apply.'}
+};
+const TT_OFF=[['10.255.0.13 → 10.255.0.11','UDP 4789',100],['10.255.0.12 → 10.255.0.11','UDP 4789',74],['10.255.0.13 → 10.255.0.12','UDP 4789',61],['10.255.0.14 → 10.255.0.11','UDP 4789',38]];
+const TT_ON=[['db-01 → db-02','TCP 5433 · VNI 10020',100],['etl-0x → lake-0x','TCP 8020 · VNI 50020',83],['db-01 → web-0x','TCP 5432 · VNI 50010',57],['etl-01 → etl-02','TCP 9092 · VNI 20030',45]];
+
+let cur='db',decode=false;
+const scn=$('scn');
+Object.entries(SC).forEach(([k,s],i)=>{
+  const b=document.createElement('button');b.setAttribute('role','radio');b.dataset.k=k;
+  b.innerHTML=`<b>${s.label}</b><span>${s.sub}</span>`;
+  b.addEventListener('click',()=>{cur=k;render(true);});
+  scn.appendChild(b);
+});
+$('dec').addEventListener('click',()=>setDecode(!decode));
+function setDecode(v){decode=v;render(true);}
+
+function drawPath(s){
+  gPath.innerHTML='';
+  Object.values(linkEls).forEach(l=>{l.setAttribute('stroke','var(--rule)');l.setAttribute('stroke-width',1.5);});
+  for(let i=0;i<s.hops.length-1;i++){
+    const a=s.hops[i],b=s.hops[i+1];
+    const tunnel=i>=1&&i<=2;
+    const [x1,y1]=P[a],[x2,y2]=P[b];
+    const host=DEV[a].t==='host'?a:(DEV[b].t==='host'?b:null);
+    const hc=host&&DEV[host].c!=='muted'?`var(--${DEV[host].c})`:'var(--ink-2)';
+    const col=tunnel?(decode?`var(--${s.vrf})`:'var(--under)'):hc;
+    el('line',{x1,y1,x2,y2,stroke:col,'stroke-width':tunnel?6:4,'stroke-linecap':'round',opacity:.9},gPath);
+    if(tunnel){
+      const mx=(x1+x2)/2,my=(y1+y2)/2;
+      const t=el('g',{},gPath);
+      const label=decode?`VNI ${s.vni}`:'UDP 4789';
+      const w=decode?64:62;
+      el('rect',{x:mx-w/2,y:my-9,width:w,height:18,rx:4,fill:decode?'var(--vni)':'var(--under)'},t);
+      el('text',{x:mx,y:my+4,'text-anchor':'middle','font-family':'var(--fm)','font-size':10,'font-weight':600,fill:'#fff'},t).textContent=label;
+    }
+  }
+}
+
+function recRows(s){
+  const r=[];
+  const o=s.outer,n=s.inner;
+  r.push(['Exporter','spine-0'+(s.hops[2]==='s1'?'1':'2'),'']);
+  if(!decode){
+    r.push(['Source IP',o[0],'o-c'],['Destination IP',o[1],'o-c'],['Ports',o[2]+' → '+o[3],'o-c'],['Protocol',o[4],'o-c'],
+           ['VNI','—','dim'],['Tenant / VRF','unknown','dim'],['Application','unknown','dim']);
+  }else{
+    r.push(['Source IP',n[0],'i-c'],['Destination IP',n[1],'i-c'],['Ports',n[2]+' → '+n[3],'i-c'],['Protocol',n[4],'i-c'],
+           ['VNI',s.vni+' ('+s.vniKind+')','v-c'],['VTEPs',o[0]+' → '+o[1],'o-c'],['Application',s.app,'i-c']);
+  }
+  return r;
+}
+
+function render(flash){
+  [...scn.children].forEach(b=>b.setAttribute('aria-checked',b.dataset.k===cur));
+  const s=SC[cur];
+  $('dec').setAttribute('aria-checked',decode);
+  $('decState').textContent=decode?'on':'off';
+  $('bar').classList.toggle('off',!decode);
+  $('barNote').textContent=decode?'decode reads the VNI and the whole inner packet':'a VXLAN-unaware collector stops here';
+  drawPath(s);
+  $('recTitle').textContent=decode?'The flow record, decoded':'The flow record, outer header only';
+  $('rec').innerHTML=recRows(s).map(([k,v,c])=>`<tr${flash?' class="fresh"':''}><td class="l">${k}</td><td class="v ${c}">${v}</td></tr>`).join('');
+  const tt=decode?TT_ON:TT_OFF;
+  $('ttCard').classList.toggle('on',decode);
+  $('tt').innerHTML='<tr><th>Conversation</th><th>Port · VNI</th><th style="width:34%">Share</th></tr>'+
+    tt.map(([a,b,v])=>`<tr${flash?' class="fresh"':''}><td>${a}</td><td>${b}</td><td><div class="bar-cell"><i style="width:${v*0.9}%"></i></div></td></tr>`).join('');
+  $('take').innerHTML=decode?s.on:s.off;
+}
+render(false);
+
+/* ---------------- use cases ---------------- */
+const UC=[
+  {q:'Who is using this spine link?',off:['Sees a symptom','Utilization, and a handful of VTEP pairs on UDP 4789.'],on:['Finds the cause','Servers, ports and tenants, ranked.'],inj:'none',query:'Dev: spines · D: Source IP, Dest IP, Dest Port, then VXLAN VNI'},
+  {q:'Why is one spine hotter than the other?',off:['Sees a symptom','spine-01 at 2.5 Gbps more than spine-02. Same leaf pair as everything else.'],on:['Finds the cause','One backup session, db-01 → backup-01. ECMP can\'t split a single 5-tuple.'],inj:'elephant',query:'D: Device, then Source IP, Dest IP, Dest Port on the hot spine'},
+  {q:'Are PAYMENTS and ANALYTICS still isolated?',off:['Looks normal','Leaf-to-leaf UDP 4789, same as always.'],on:['Finds the cause','10.10.x → 10.20.x on the spines in VNI 50020: traffic is crossing the fabric.'],inj:'leak',query:'F: Src 10.10.0.0/16, Dst 10.20.0.0/16 · D: Device, VXLAN VNI'},
+  {q:'Which tenant is eating fabric capacity?',off:['Sees a symptom','Both spines up. Everything looks busier.'],on:['Finds the cause','VNI 50020 (ANALYTICS) doubled: a lake rebuild across many streams.'],inj:'noisy',query:'Dev: spines · D: VXLAN VNI, then Source IP, Dest IP'},
+  {q:'Where did that internet traffic go inside the DC?',off:['Sees a symptom','The edge saw it. Inside the fabric it\'s just border-leaf → leaf-01.'],on:['Finds the cause','Customer IPs, with geo and ASN, on the spines and down to web-01.'],inj:'surge',query:'Dev: spines · F: Src not in 10.0.0.0/8 · D: Source IP, Dest IP, Dest Port'},
+  {q:'What path does web-01 → db-01 take?',off:['Looks normal','Can\'t tell from the spines. Only the server ports show the real IPs.'],on:['Finds the cause','Leaf-01 port 1 → uplink → spine → leaf-03 → port 1, per connection.'],inj:'none',query:'F: Src 10.10.1.21, Dst 10.10.2.45 · D: Device, Input/Output Interface'}
+];
+$('uc').innerHTML=UC.map(u=>`<div class="card tile">
+  <div class="q">${u.q}</div>
+  <div class="verdicts">
+    <div class="vd ${u.off[0]==='Looks normal'?'normal':'symptom'}"><b>Outer header only · ${u.off[0]}</b>${u.off[1]}</div>
+    <div class="vd cause"><b>With decode · ${u.on[0]}</b>${u.on[1]}</div>
+  </div>
+  <div class="meta">Lab inject: <code>${u.inj}</code></div>
+  <div class="meta">${u.query}</div>
+</div>`).join('');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+{
+  "_comment": "VXLAN EVPN leaf-spine lab. Names and addresses match the fabric walkthrough. Every fabric switch is an sFlow exporter; mgmt_ip is the source IP its datagrams come from, which is what you enter as the device's sending IP in Kentik. In flows, mbps and reply_mbps are per source/destination pair, split across that many sessions (5-tuples).",
+  "sample_rate": 1024,
+  "header_bytes": 128,
+  "counter_interval": 20,
+  "anycast_gateway_mac": "00:00:5e:00:01:01",
+  "firewall_mac": "00:1b:17:00:0f:01",
+
+  "vrfs": {
+    "PAYMENTS": {"l3vni": 50010},
+    "ANALYTICS": {"l3vni": 50020}
+  },
+
+  "segments": [
+    {"name": "pay-web",    "vlan": 10, "vni": 10010, "vrf": "PAYMENTS",  "subnet": "10.10.1.0/24"},
+    {"name": "pay-db",     "vlan": 20, "vni": 10020, "vrf": "PAYMENTS",  "subnet": "10.10.2.0/24"},
+    {"name": "pay-backup", "vlan": 25, "vni": 10025, "vrf": "PAYMENTS",  "subnet": "10.10.5.0/24"},
+    {"name": "anl-etl",    "vlan": 30, "vni": 20030, "vrf": "ANALYTICS", "subnet": "10.20.3.0/24"},
+    {"name": "anl-lake",   "vlan": 40, "vni": 20040, "vrf": "ANALYTICS", "subnet": "10.20.4.0/24"}
+  ],
+
+  "devices": [
+    {"name": "spine-01",    "role": "spine",  "mgmt_ip": "192.168.250.1",  "loopback": "10.0.0.1",
+     "downlinks": {"border-leaf": "Ethernet1", "leaf-01": "Ethernet2", "leaf-02": "Ethernet3", "leaf-03": "Ethernet4"}},
+    {"name": "spine-02",    "role": "spine",  "mgmt_ip": "192.168.250.2",  "loopback": "10.0.0.2",
+     "downlinks": {"border-leaf": "Ethernet1", "leaf-01": "Ethernet2", "leaf-02": "Ethernet3", "leaf-03": "Ethernet4"}},
+    {"name": "border-leaf", "role": "border", "mgmt_ip": "192.168.250.14", "vtep": "10.255.0.14",
+     "uplinks": {"spine-01": "Ethernet49", "spine-02": "Ethernet50"},
+     "edge_ports": {"PAYMENTS": "Ethernet1", "ANALYTICS": "Ethernet2"}},
+    {"name": "leaf-01",     "role": "leaf",   "mgmt_ip": "192.168.250.11", "vtep": "10.255.0.11",
+     "uplinks": {"spine-01": "Ethernet49", "spine-02": "Ethernet50"}},
+    {"name": "leaf-02",     "role": "leaf",   "mgmt_ip": "192.168.250.12", "vtep": "10.255.0.12",
+     "uplinks": {"spine-01": "Ethernet49", "spine-02": "Ethernet50"}},
+    {"name": "leaf-03",     "role": "leaf",   "mgmt_ip": "192.168.250.13", "vtep": "10.255.0.13",
+     "uplinks": {"spine-01": "Ethernet49", "spine-02": "Ethernet50"}}
+  ],
+
+  "hosts": [
+    {"name": "web-01",    "ip": "10.10.1.21", "leaf": "leaf-01", "port": "Ethernet1", "vlan": 10},
+    {"name": "web-02",    "ip": "10.10.1.22", "leaf": "leaf-02", "port": "Ethernet1", "vlan": 10},
+    {"name": "web-03",    "ip": "10.10.1.23", "leaf": "leaf-02", "port": "Ethernet3", "vlan": 10},
+    {"name": "db-01",     "ip": "10.10.2.45", "leaf": "leaf-03", "port": "Ethernet1", "vlan": 20},
+    {"name": "db-02",     "ip": "10.10.2.46", "leaf": "leaf-01", "port": "Ethernet2", "vlan": 20},
+    {"name": "backup-01", "ip": "10.10.5.50", "leaf": "leaf-02", "port": "Ethernet4", "vlan": 25},
+    {"name": "etl-01",    "ip": "10.20.3.30", "leaf": "leaf-02", "port": "Ethernet2", "vlan": 30},
+    {"name": "etl-02",    "ip": "10.20.3.31", "leaf": "leaf-03", "port": "Ethernet2", "vlan": 30},
+    {"name": "lake-01",   "ip": "10.20.4.40", "leaf": "leaf-01", "port": "Ethernet3", "vlan": 40},
+    {"name": "lake-02",   "ip": "10.20.4.41", "leaf": "leaf-03", "port": "Ethernet4", "vlan": 40}
+  ],
+
+  "external": {
+    "internet": {"vrf": "PAYMENTS", "pools": ["203.0.113.0/24", "192.0.2.0/24"], "nat_vip": "198.51.100.10"},
+    "branch":   {"vrf": "PAYMENTS", "pools": ["10.50.12.0/24"]}
+  },
+
+  "flows": [
+    {"name": "web-health-check", "src": ["web-01", "web-02", "web-03"], "dst": ["web-01", "web-02", "web-03"],
+     "proto": "tcp", "dport": 8443, "mbps": 2, "reply_mbps": 2, "ip_len": 300, "sessions": 1,
+     "about": "Bridged east-west in L2 VNI 10010"},
+    {"name": "web-to-db", "src": ["web-01", "web-02", "web-03"], "dst": ["db-01"],
+     "proto": "tcp", "dport": 5432, "mbps": 30, "reply_mbps": 120, "ip_len": 900, "sessions": 8,
+     "about": "Routed in VRF PAYMENTS, L3 VNI 50010"},
+    {"name": "db-replication", "src": ["db-01"], "dst": ["db-02"],
+     "proto": "tcp", "dport": 5433, "mbps": 80, "reply_mbps": 2, "ip_len": 1450, "sessions": 2,
+     "about": "Bridged in L2 VNI 10020 between racks"},
+    {"name": "internet-https", "src": ["internet:300"], "dst": ["web-01", "web-02", "web-03"],
+     "proto": "tcp", "dport": 443, "mbps": 0.2, "reply_mbps": 1.5, "ip_len": 1200, "sessions": 1,
+     "about": "North-south: customers enter at border-leaf, NATed to web servers"},
+    {"name": "branch-portal", "src": ["branch:40"], "dst": ["web-02"],
+     "proto": "tcp", "dport": 443, "mbps": 0.3, "reply_mbps": 2, "ip_len": 1100, "sessions": 1,
+     "about": "Branch-12 users over SD-WAN to the finance portal"},
+    {"name": "etl-kafka", "src": ["etl-01"], "dst": ["etl-02"],
+     "proto": "tcp", "dport": 9092, "mbps": 60, "reply_mbps": 3, "ip_len": 1400, "sessions": 4,
+     "about": "Bridged in L2 VNI 20030"},
+    {"name": "etl-to-lake", "src": ["etl-01", "etl-02"], "dst": ["lake-01", "lake-02"],
+     "proto": "tcp", "dport": 8020, "mbps": 100, "reply_mbps": 5, "ip_len": 1450, "sessions": 4,
+     "about": "Routed in VRF ANALYTICS, L3 VNI 50020"},
+    {"name": "cross-vrf-attempt", "src": ["web-01"], "dst": ["etl-01"],
+     "proto": "tcp", "dport": 9092, "mbps": 0.5, "reply_mbps": 0, "ip_len": 60, "sessions": 3,
+     "about": "PAYMENTS app misconfigured to hit ANALYTICS Kafka. No route, dropped at leaf-01"}
+  ],
+
+  "injects": {
+    "leak": {
+      "about": "Someone leaks routes between VRFs. PAYMENTS web servers now reach ANALYTICS across the fabric.",
+      "flows": [
+        {"name": "vrf-leak", "src": ["web-01", "web-02", "web-03"], "dst": ["etl-02", "lake-02"],
+         "proto": "tcp", "dport": 9092, "mbps": 25, "reply_mbps": 10, "ip_len": 1000, "sessions": 3, "leak": true}
+      ]
+    },
+    "elephant": {
+      "about": "A nightly backup dumps db-01 to backup-01 over one TCP session. One 5-tuple hashes to one spine.",
+      "flows": [
+        {"name": "backup-elephant", "src": ["db-01"], "dst": ["backup-01"],
+         "proto": "tcp", "dport": 10566, "mbps": 2500, "reply_mbps": 20, "ip_len": 1450, "sessions": 1}
+      ]
+    },
+    "noisy": {
+      "about": "ANALYTICS kicks off a full lake rebuild. Hundreds of parallel streams fill both spines.",
+      "flows": [
+        {"name": "lake-rebuild", "src": ["lake-01", "lake-02"], "dst": ["etl-01", "etl-02"],
+         "proto": "tcp", "dport": 50010, "mbps": 400, "reply_mbps": 10, "ip_len": 1450, "sessions": 64}
+      ]
+    },
+    "surge": {
+      "about": "A burst of UDP from a few thousand internet sources aimed at the payments site.",
+      "flows": [
+        {"name": "udp-surge", "src": ["internet:2000"], "dst": ["web-01"],
+         "proto": "udp", "dport": 443, "mbps": 0.6, "reply_mbps": 0, "ip_len": 120, "sessions": 1}
+      ]
+    }
+  }
+}

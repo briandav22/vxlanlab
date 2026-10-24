@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important} body{margin:0} img{max-width:100%}</style>
+<title>VXLAN Fabric Walkthrough</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: a trace bench. Full-width map on top, the readout (caption + wire stack) under it, then the stitching strip and the collector logbook. */
+:root{
+  --paper:#edf1f3; --panel:#fbfcfd; --sunk:#e3e9ed; --ink:#122029; --ink-2:#51616e; --rule:#cad4db; --grid:#dbe3e8;
+  --under:#44607e;  /* underlay, outer headers, VTEPs */
+  --vni:#7343be;    /* VXLAN header, VNI */
+  --inner:#087e62;  /* original packet */
+  --flow:#c75a0b;   /* flow export, collector, enrichment */
+  --pay:#1f6fd6;    /* VRF PAYMENTS */
+  --anl:#bc376a;    /* VRF ANALYTICS */
+  --tun:#6b6f2a;    /* SD-WAN / IPsec tunnel */
+  --drop:#c22c27;
+  --fd:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --fb:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --fm:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+    --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --tun:#c9cc6a; --drop:#f26a60;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+  --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --tun:#c9cc6a; --drop:#f26a60;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--fb);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--flow);outline-offset:2px}
+
+.wrap{max-width:1600px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:22px 56px;display:grid;gap:22px}
+@media (min-width:1000px){.wrap{padding-left:max(28px,env(safe-area-inset-left,0px));padding-right:max(28px,env(safe-area-inset-right,0px))}}
+
+.top{display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1200px){.top{grid-template-columns:minmax(0,.9fr) minmax(0,1.6fr);align-items:end}}
+.mast{display:grid;gap:8px;max-width:64ch}
+.eyebrow{font:600 11.5px/1.2 var(--fm);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin:0}
+h1{font-family:var(--fd);font-stretch:78%;font-weight:800;font-size:clamp(30px,5vw,52px);line-height:.98;letter-spacing:-.01em;margin:0;text-wrap:balance}
+.lede{margin:0;color:var(--ink-2);font-size:16px}
+.lede b{color:var(--ink);font-weight:600}
+
+/* glossary strip */
+.gloss{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.gcard{--c:var(--ink);display:grid;gap:4px;align-content:start;text-align:left;padding:11px 13px 10px;border:1px solid var(--rule);border-left:4px solid var(--c);background:var(--panel);border-radius:6px;cursor:pointer}
+.gcard[aria-pressed="true"]{background:color-mix(in srgb,var(--c) 9%,var(--panel));border-color:var(--c)}
+.gtop{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.gterm{font-family:var(--fd);font-stretch:82%;font-weight:800;font-size:19px;color:var(--c);line-height:1}
+.gexp{font:500 11px var(--fm);color:var(--ink-2)}
+.gdef{font-size:13.5px;line-height:1.45}
+.gmap{font:500 11px var(--fm);color:var(--c)}
+.g-vrf{--c:var(--pay)} .g-vni{--c:var(--vni)} .g-vtep{--c:var(--under)}
+
+/* controls */
+.controls{display:grid;gap:10px}
+@media (min-width:1100px){.controls{grid-template-columns:minmax(0,1fr) auto;align-items:stretch}}
+.seg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px}
+.seg button{display:grid;gap:1px;text-align:left;padding:9px 11px;border:1px solid var(--rule);background:var(--panel);border-radius:8px;cursor:pointer;transition:border-color .15s,background .15s}
+.seg button b{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:15px;line-height:1.15}
+.seg button span{font:500 11px/1.3 var(--fm);color:var(--ink-2);letter-spacing:.02em}
+.seg button[aria-checked="true"]{border-color:var(--ink);background:var(--sunk);box-shadow:inset 0 -3px 0 var(--ink)}
+.transport{display:flex;gap:8px;align-items:stretch}
+.send{flex:1 1 auto;min-width:0;display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 22px;border:0;border-radius:8px;background:var(--ink);color:var(--paper);font-family:var(--fd);font-stretch:90%;font-weight:700;font-size:16px;cursor:pointer;white-space:nowrap}
+.send svg{width:16px;height:16px}
+.tbtns{display:flex;gap:6px}
+.icon{width:44px;display:grid;place-items:center;border:1px solid var(--rule);background:var(--panel);border-radius:8px;cursor:pointer}
+.icon svg{width:16px;height:16px}
+.icon:disabled{opacity:.4;cursor:default}
+.speed{width:auto;padding:0 10px;font:600 12px var(--fm)}
+
+/* map */
+.map-card{background-color:var(--panel);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:22px 22px;border:1px solid var(--rule);border-radius:10px;padding:8px 8px 4px;min-width:0}
+.map-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#map{display:block;width:100%;height:auto}
+@media (max-width:1040px){#map{width:1040px;max-width:none}}
+.scroll-hint{display:none;font:500 11.5px var(--fm);color:var(--ink-2);padding:4px 6px 0}
+@media (max-width:1040px){.scroll-hint{display:block}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:8px 6px 4px;font:500 11.5px/1.3 var(--fm);color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:18px;height:0;border-top:2.5px solid var(--c)}
+.legend i.dash{border-top-style:dashed}
+.legend i.box{width:12px;height:12px;border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 14%,transparent);border-radius:3px}
+
+/* svg */
+.zone{fill:color-mix(in srgb,var(--ink) 3%,transparent);stroke:var(--rule);stroke-width:1.2;stroke-dasharray:5 4}
+.zone.fab{fill:color-mix(in srgb,var(--under) 5%,transparent);stroke:color-mix(in srgb,var(--under) 45%,var(--rule))}
+.zlab{font-family:var(--fm);font-weight:600;font-size:10.5px;letter-spacing:.12em;fill:var(--ink-2)}
+.zlab.fab{fill:var(--under)}
+.llab{font-family:var(--fm);font-weight:600;font-size:9.5px;fill:var(--tun);letter-spacing:.06em}
+.l-under{stroke:var(--under);stroke-opacity:.42;stroke-width:1.8}
+.l-access{stroke-opacity:.55;stroke-width:1.5}
+.acc-PAY{stroke:var(--pay)} .acc-ANL{stroke:var(--anl)}
+.l-edge{stroke:var(--ink-2);stroke-opacity:.55;stroke-width:1.6}
+.l-net{stroke:var(--ink-2);stroke-opacity:.6;stroke-width:1.6;stroke-dasharray:5 4}
+.l-wan{stroke:var(--tun);stroke-opacity:.75;stroke-width:2;stroke-dasharray:7 4}
+.l-under.live,.l-access.live,.l-edge.live,.l-net.live,.l-wan.live{stroke-opacity:1;stroke-width:3.6}
+.l-edge.live,.l-net.live{stroke:var(--ink)}
+.l-under.ecmp{stroke:var(--vni);stroke-opacity:.95;stroke-width:2.4;stroke-dasharray:6 5}
+.l-sflow{fill:none;stroke:var(--flow);stroke-opacity:.22;stroke-width:1.2;stroke-dasharray:2 4}
+.l-sflow.live{stroke-opacity:.95;stroke-width:1.8;animation:march .5s linear infinite}
+@keyframes march{to{stroke-dashoffset:-12}}
+.n-box{fill:var(--panel);stroke:var(--rule);stroke-width:1.3}
+.n-spine .n-box,.n-leaf .n-box{stroke:color-mix(in srgb,var(--under) 55%,var(--rule))}
+.n-host.vrf-PAY .n-box{fill:color-mix(in srgb,var(--pay) 9%,var(--panel));stroke:var(--pay)}
+.n-host.vrf-ANL .n-box{fill:color-mix(in srgb,var(--anl) 9%,var(--panel));stroke:var(--anl)}
+.n-edge .n-box{fill:var(--sunk);stroke:var(--ink-2)}
+.n-ext .n-box{fill:var(--panel);stroke:var(--ink-2);stroke-dasharray:4 3}
+.n-coll .n-box{fill:color-mix(in srgb,var(--flow) 9%,var(--panel));stroke:var(--flow);stroke-width:1.6}
+.node.active .n-box{stroke:var(--ink);stroke-width:2.4}
+.n-name{font-family:var(--fd);font-stretch:85%;font-weight:700;fill:var(--ink)}
+.n-sub{font-family:var(--fm);fill:var(--ink-2)}
+.n-exp{font-family:var(--fm);font-weight:600;fill:var(--flow)}
+.n-eyebrow{font-family:var(--fm);font-weight:600;letter-spacing:.14em;fill:var(--flow)}
+.n-count{font-family:var(--fd);font-weight:800;fill:var(--flow);font-variant-numeric:tabular-nums}
+.vtep-badge{fill:color-mix(in srgb,var(--under) 12%,var(--panel));stroke:var(--under);stroke-width:1}
+.vtep-t{font-family:var(--fm);font-weight:600;fill:var(--under)}
+.vrf-chip rect{stroke-width:1}
+.vrf-chip.PAY rect{fill:color-mix(in srgb,var(--pay) 14%,var(--panel));stroke:var(--pay)} .vrf-chip.PAY text{fill:var(--pay)}
+.vrf-chip.ANL rect{fill:color-mix(in srgb,var(--anl) 14%,var(--panel));stroke:var(--anl)} .vrf-chip.ANL text{fill:var(--anl)}
+.vrf-chip text,.vni-chip text{font-family:var(--fm);font-weight:600}
+.vni-chip rect{fill:color-mix(in srgb,var(--vni) 12%,var(--panel));stroke:var(--vni);stroke-width:1}
+.vni-chip text{fill:var(--vni)}
+.n-coll.pulse .n-box{animation:pulse .5s ease-out}
+@keyframes pulse{0%{stroke-width:5}100%{stroke-width:1.6}}
+.hl-vtep .vtep-badge{fill:var(--under)} .hl-vtep .vtep-t{fill:var(--panel)}
+.hl-vni .vni-chip rect{fill:var(--vni)} .hl-vni .vni-chip text{fill:var(--panel)}
+.hl-vrf .vrf-chip.PAY rect{fill:var(--pay)} .hl-vrf .vrf-chip.ANL rect{fill:var(--anl)} .hl-vrf .vrf-chip text{fill:var(--panel)}
+.hl-vrf .n-host .n-box{stroke-width:3}
+.pk-outer{fill:color-mix(in srgb,var(--under) 24%,var(--panel));stroke:var(--under);stroke-width:1.6}
+.pk-outer.esp{fill:color-mix(in srgb,var(--tun) 45%,var(--panel));stroke:var(--tun)}
+.pk-inner{fill:var(--inner);transition:opacity .3s}
+.pk-inner.dim{opacity:.35}
+.pk-vx{fill:var(--vni)}
+.pk-label{font-family:var(--fm);font-weight:600;fill:var(--vni);paint-order:stroke;stroke:var(--panel);stroke-width:3.5px;stroke-linejoin:round}
+.pk-label.esp{fill:var(--tun)}
+.pk-x line{stroke:var(--drop);stroke-width:3.2;stroke-linecap:round}
+.flt{fill:var(--flow);stroke:var(--panel);stroke-width:1.2}
+
+/* readout */
+.readout{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:920px){.readout{grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr);align-items:start}}
+.caption{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px 13px;display:grid;gap:9px;min-width:0}
+.cap-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.stepno{font:600 11.5px var(--fm);letter-spacing:.06em;color:var(--ink-2);text-transform:uppercase}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{--c:var(--ink-2);font:600 10.5px/1 var(--fm);letter-spacing:.06em;text-transform:uppercase;padding:4px 7px;border-radius:3px;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);border:1px solid color-mix(in srgb,var(--c) 38%,transparent)}
+.t-vrf{--c:var(--pay)} .t-vni{--c:var(--vni)} .t-under{--c:var(--under)} .t-inner{--c:var(--inner)} .t-flow{--c:var(--flow)} .t-drop{--c:var(--drop)} .t-tun{--c:var(--tun)} .t-edge{--c:var(--ink-2)}
+.cap-title{font-family:var(--fd);font-stretch:84%;font-weight:750;font-size:24px;line-height:1.12;margin:0;text-wrap:balance}
+.cap-body{margin:0;max-width:72ch;font-size:16px}
+.hint{margin:0;font-size:13.5px;color:var(--ink-2)}
+.steps{display:flex;gap:3px;margin-top:4px}
+.steps i{flex:1;height:4px;border-radius:2px;background:var(--sunk)}
+.steps i.past{background:color-mix(in srgb,var(--ink) 45%,transparent)}
+.steps i.cur{background:var(--ink)}
+.dwell{height:2px;border-radius:1px;overflow:hidden}
+.dwell i{display:block;height:100%;width:0;background:var(--flow)}
+
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 14px 12px;display:grid;gap:10px;min-width:0;align-content:start}
+.ph{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.panel h3{font-family:var(--fd);font-stretch:85%;font-weight:750;font-size:17px;margin:0}
+.mono{font-family:var(--fm)}
+.ph .mono{font-size:11.5px;color:var(--ink-2)}
+.stack{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.grp-label{font:600 10.5px/1.2 var(--fm);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);padding:6px 0 1px}
+.hrow{--c:var(--rule);display:grid;grid-template-columns:4px minmax(0,1fr) auto;column-gap:10px;padding:6px 10px 6px 0;background:var(--sunk);border-radius:4px;align-items:baseline}
+.hrow .sw{grid-row:1/3;align-self:stretch;background:var(--c);border-radius:4px 0 0 4px}
+.hn{font-weight:600;font-size:12.5px}
+.hb{font:500 11px var(--fm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.hv{grid-column:2/4;font:500 12.5px/1.35 var(--fm);overflow-wrap:anywhere}
+.L-outer{--c:var(--under)} .L-vxlan{--c:var(--vni)} .L-inner{--c:var(--inner)} .L-payload{--c:var(--rule)} .L-enr{--c:var(--flow)} .L-tun{--c:var(--tun)} .L-dev{--c:var(--ink-2)}
+.hrow.dim{opacity:.4}
+.hrow.new{animation:slide .45s ease-out both}
+@keyframes slide{from{opacity:0;transform:translateX(-10px)}}
+.stack.dropped .hrow{opacity:.5}
+.stack.dropped .hv{text-decoration:line-through;text-decoration-color:var(--drop)}
+.dropbar{font:600 12px/1.35 var(--fm);color:var(--drop);border:1px solid color-mix(in srgb,var(--drop) 45%,transparent);background:color-mix(in srgb,var(--drop) 10%,transparent);border-radius:4px;padding:7px 10px}
+.note{margin:0;font-size:13.5px;color:var(--ink-2)}
+
+/* section heads */
+.sec-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:end;gap:10px 20px}
+.sec-head h2{font-family:var(--fd);font-stretch:80%;font-weight:800;font-size:clamp(24px,3.4vw,32px);line-height:1.02;margin:0;text-wrap:balance}
+.sec-head p{margin:6px 0 0;color:var(--ink-2);max-width:80ch}
+.ghost{border:1px solid var(--rule);background:var(--panel);border-radius:8px;padding:8px 14px;font:600 12px var(--fm);cursor:pointer}
+
+/* stitching strip */
+.stitch{display:grid;gap:12px}
+.chain-wrap{overflow-x:auto;padding-bottom:6px}
+.chain{display:flex;align-items:stretch;gap:0;min-width:min-content}
+.hop{flex:0 0 210px;display:grid;gap:5px;align-content:start;text-align:left;padding:10px 11px;border:1px solid var(--rule);border-top:4px solid var(--c);background:var(--panel);border-radius:6px;cursor:pointer}
+.hop.sel{border-color:var(--flow);box-shadow:0 0 0 1px var(--flow)}
+.hop.k-full{--c:var(--vni)} .hop.k-inner{--c:var(--inner)} .hop.k-rec{--c:var(--ink-2)} .hop.k-esp{--c:var(--tun)}
+.hop-top{display:flex;justify-content:space-between;gap:6px;align-items:baseline}
+.hop b{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:15px}
+.hop .pr{font:600 10px var(--fm);letter-spacing:.06em;color:var(--c);text-transform:uppercase}
+.hop .kv{font:500 11.5px/1.4 var(--fm);overflow-wrap:anywhere}
+.hop .kv span{color:var(--ink-2)}
+.join{flex:0 0 132px;display:grid;place-items:center;padding:0 8px;position:relative}
+.join::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:2px dashed var(--flow);opacity:.6}
+.join span{position:relative;background:var(--paper);border:1px solid color-mix(in srgb,var(--flow) 45%,var(--rule));color:var(--ink);font:500 11px/1.35 var(--fm);padding:6px 7px;border-radius:5px;text-align:center}
+.join.warn span{border-color:var(--tun);color:var(--tun)}
+.chain-empty{color:var(--ink-2);font-size:14px;padding:10px 2px}
+
+/* collector */
+.collector{display:grid;gap:14px}
+.coll-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1240px){.coll-grid{grid-template-columns:minmax(0,1fr) 420px;align-items:start}}
+.table-wrap{overflow:auto;max-height:560px;border:1px solid var(--rule);border-radius:10px;background:var(--panel);min-width:0}
+table{border-collapse:separate;border-spacing:0;width:100%;min-width:1180px;font-size:12.5px}
+thead{position:sticky;top:0;z-index:2}
+th{background:var(--panel);text-align:left;font:600 10.5px/1.25 var(--fm);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);padding:8px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}
+tr.grp th{padding:9px 10px 5px;border-bottom:0;border-top:3px solid var(--c,transparent);color:var(--c,var(--ink-2))}
+th.g-out{--c:var(--under)} th.g-vni{--c:var(--vni)} th.g-in{--c:var(--inner)} th.g-enr{--c:var(--flow)}
+td{padding:8px 10px;border-bottom:1px solid var(--grid);font-family:var(--fm);white-space:nowrap;vertical-align:top;font-variant-numeric:tabular-nums}
+td small{display:block;font-size:10.5px;color:var(--ink-2);margin-top:1px}
+td.num{color:var(--ink-2);font-weight:600}
+td.exp{font-family:var(--fb)} td.exp b{font-weight:600}
+td.c-out{background:color-mix(in srgb,var(--under) 10%,transparent)}
+td.c-tun{background:color-mix(in srgb,var(--tun) 13%,transparent)}
+td.c-vni{background:color-mix(in srgb,var(--vni) 13%,transparent);color:var(--vni);font-weight:600}
+td.c-in{background:color-mix(in srgb,var(--inner) 10%,transparent)}
+td.c-enr{background:color-mix(in srgb,var(--flow) 9%,transparent);font-family:var(--fb)}
+td.c-enr b{font-weight:600}
+td.na{color:color-mix(in srgb,var(--ink-2) 55%,transparent);text-align:center}
+td.enc{color:var(--tun);text-align:center;font-style:italic}
+.rt{display:inline-block;font:600 10px/1 var(--fm);letter-spacing:.05em;text-transform:uppercase;padding:3px 5px;border-radius:3px;border:1px solid currentColor}
+.rt.sflow{color:var(--flow)} .rt.ipfix{color:var(--ink-2)}
+tbody tr{cursor:pointer}
+tbody tr:hover td{filter:brightness(.97)}
+tbody tr.sel td.num{color:var(--flow);box-shadow:inset 4px 0 0 var(--flow)}
+tbody tr.sel td{border-bottom-color:var(--flow)}
+tbody tr.fresh td{animation:fresh 1.8s ease-out}
+@keyframes fresh{0%{box-shadow:inset 0 0 0 999px color-mix(in srgb,var(--flow) 26%,transparent)}100%{box-shadow:inset 0 0 0 999px transparent}}
+tr.empty td{font-family:var(--fb);color:var(--ink-2);text-align:center;padding:26px;white-space:normal}
+tr.runsep td{background:var(--sunk);font:600 10.5px var(--fm);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);padding:6px 10px;cursor:default}
+.flag{display:inline-block;margin-left:6px;font:600 10px/1 var(--fm);letter-spacing:.05em;text-transform:uppercase;color:var(--drop);border:1px solid var(--drop);border-radius:3px;padding:3px 5px;vertical-align:1px}
+
+.decode .kind{font:600 10.5px/1 var(--fm);letter-spacing:.06em;text-transform:uppercase;padding:4px 7px;border-radius:3px;border:1px solid currentColor}
+.kind.full{color:var(--vni)} .kind.inner{color:var(--inner)} .kind.rec{color:var(--ink-2)} .kind.esp{color:var(--tun)}
+.bytes{display:grid;gap:4px}
+.bar{display:flex;height:30px;border-radius:4px;overflow:hidden;border:1px solid var(--rule)}
+.bseg{min-width:0;display:grid;place-items:center;background:var(--c);color:var(--panel);font:600 9.5px/1 var(--fm);overflow:hidden;border-right:1px solid color-mix(in srgb,var(--panel) 60%,transparent)}
+.bseg.L-payload{background:repeating-linear-gradient(135deg,var(--sunk) 0 5px,transparent 5px 9px);color:var(--ink-2)}
+.ticks{display:flex;justify-content:space-between;font:500 10px var(--fm);color:var(--ink-2)}
+.fgs{display:grid;gap:9px}
+.fg{border-left:3px solid var(--c);padding:2px 0 2px 10px}
+.fg h4{margin:0 0 3px;font:600 10.5px/1.3 var(--fm);letter-spacing:.07em;text-transform:uppercase;color:var(--c)}
+.fg dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px}
+.fg dt{font-size:12.5px;color:var(--ink-2)}
+.fg dd{margin:0;font:500 12.5px/1.4 var(--fm);overflow-wrap:anywhere}
+.fg dd small{display:block;font-family:var(--fb);font-size:12px;color:var(--ink-2)}
+.fg.absent{opacity:.65}
+.fg p{margin:0;font-size:12.5px;color:var(--ink-2)}
+.vantage{margin:0;font-size:13.5px;border-top:1px solid var(--rule);padding-top:10px}
+
+.lim-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:800px){.lim-grid{grid-template-columns:1fr 1fr}}
+.limits{display:grid;gap:14px}
+.lim{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;border-top:4px solid var(--c)}
+.lim.can{--c:var(--inner)} .lim.cant{--c:var(--ink-2)}
+.lim h3{margin:0 0 8px;font-family:var(--fd);font-stretch:85%;font-weight:750;font-size:18px}
+.lim ul{margin:0;padding-left:18px;display:grid;gap:6px}
+.lim li::marker{color:var(--c)}
+.foot{margin:0;color:var(--ink-2);font-size:13.5px;max-width:90ch}
+
+@media (max-width:560px){
+  .cap-title{font-size:20px}
+  .cap-body{font-size:15px}
+  .send{padding:12px 14px}
+}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="top">
+    <header class="mast">
+      <p class="eyebrow">Overlay · Underlay · Flow</p>
+      <h1>VXLAN Fabric Walkthrough</h1>
+      <p class="lede">Send a packet through a leaf-spine fabric and see what the <b>VRF</b>, <b>VNI</b> and <b>VTEP</b> each do to it. Traffic can start on a server, at a customer on the internet, or at a branch office. Every device on the path exports flow data to a Kentik collector, and the panels below show how those records line up into one conversation.</p>
+    </header>
+    <div class="gloss" aria-label="Key terms">
+      <button type="button" class="gcard g-vrf" id="g-vrf" data-hl="vrf" aria-pressed="false">
+        <span class="gtop"><span class="gterm">VRF</span><span class="gexp">virtual routing &amp; forwarding</span></span>
+        <span class="gdef">A separate routing table on each leaf. Each tenant gets its own, so PAYMENTS can't route to ANALYTICS unless someone deliberately leaks routes. Two VRFs can reuse the same IPs.</span>
+        <span class="gmap">On the map: host colors and the chips in each leaf</span>
+      </button>
+      <button type="button" class="gcard g-vni" id="g-vni" data-hl="vni" aria-pressed="false">
+        <span class="gtop"><span class="gterm">VNI</span><span class="gexp">VXLAN network identifier</span></span>
+        <span class="gdef">A 24-bit label in the VXLAN header. An L2 VNI is one subnet stretched across racks. An L3 VNI stands for a whole VRF when traffic is routed.</span>
+        <span class="gmap">On the map: purple tags under servers and on the packet</span>
+      </button>
+      <button type="button" class="gcard g-vtep" id="g-vtep" data-hl="vtep" aria-pressed="false">
+        <span class="gtop"><span class="gterm">VTEP</span><span class="gexp">VXLAN tunnel endpoint</span></span>
+        <span class="gdef">The part of each leaf that adds and removes the outer headers. The underlay only ever sees VTEP-to-VTEP traffic on UDP 4789.</span>
+        <span class="gmap">On the map: the badge inside each leaf</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" role="radiogroup" aria-label="Scenario">
+      <button type="button" role="radio" id="sc-l2" data-scn="l2" aria-checked="false"><b>Same subnet</b><span>bridged · L2 VNI</span></button>
+      <button type="button" role="radio" id="sc-l3" data-scn="l3" aria-checked="true"><b>Other subnet</b><span>routed · L3 VNI</span></button>
+      <button type="button" role="radio" id="sc-xvrf" data-scn="xvrf" aria-checked="false"><b>Other VRF</b><span>no route · dropped</span></button>
+      <button type="button" role="radio" id="sc-user" data-scn="user" aria-checked="false"><b>From internet</b><span>customer · NAT</span></button>
+      <button type="button" role="radio" id="sc-int" data-scn="int" aria-checked="false"><b>From a branch</b><span>employee · SD-WAN</span></button>
+    </div>
+    <div class="transport">
+      <button type="button" class="send" id="send"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h10M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Send packet</span></button>
+      <div class="tbtns">
+        <button type="button" class="icon" id="prev" aria-label="Previous step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" class="icon" id="play" aria-label="Play"><svg viewBox="0 0 16 16" aria-hidden="true" id="play-ico"></svg></button>
+        <button type="button" class="icon" id="next" aria-label="Next step"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button type="button" class="icon speed" id="speed" aria-label="Playback speed">1×</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="map-card">
+    <div class="map-scroll" id="map-scroll">
+      <svg id="map" role="img" aria-label="Network map: internet and branch office on the left, data center edge routers and firewall, a VXLAN leaf-spine fabric with four leaves and four servers, and a Kentik flow collector on the right"></svg>
+    </div>
+    <div class="scroll-hint">Swipe the map sideways. It follows the packet as it moves.</div>
+    <div class="legend" aria-hidden="true">
+      <span><i style="--c:var(--under)"></i>underlay link</span>
+      <span><i style="--c:var(--ink-2)"></i>routed link</span>
+      <span><i class="dash" style="--c:var(--ink-2)"></i>internet</span>
+      <span><i class="dash" style="--c:var(--tun)"></i>SD-WAN tunnel</span>
+      <span><i class="dash" style="--c:var(--flow)"></i>flow export</span>
+      <span><i class="box" style="--c:var(--pay)"></i>VRF PAYMENTS</span>
+      <span><i class="box" style="--c:var(--anl)"></i>VRF ANALYTICS</span>
+      <span><i class="box" style="--c:var(--vni)"></i>VNI</span>
+    </div>
+  </div>
+
+  <section class="readout" aria-label="Current step">
+    <div class="caption" id="caption" aria-live="polite"></div>
+    <div class="panel">
+      <div class="ph"><h3>Packet on the wire</h3><span class="mono" id="wire-bytes"></span></div>
+      <ol class="stack" id="stack"></ol>
+      <p class="note" id="stack-note"></p>
+    </div>
+  </section>
+
+  <section class="stitch" aria-label="How the records line up">
+    <div class="sec-head"><div>
+      <p class="eyebrow">Kentik collector · path stitching</p>
+      <h2>One conversation, every device</h2>
+      <p>Each card is one flow record from the selected run, in path order. The labels between them show what the collector matches on to know the records describe the same traffic. Tap a card to decode its record.</p>
+    </div></div>
+    <div class="chain-wrap"><div class="chain" id="chain"></div></div>
+  </section>
+
+  <section class="collector" aria-label="Decoded flow records">
+    <div class="sec-head">
+      <div>
+        <p class="eyebrow">Kentik collector · logbook</p>
+        <h2>Decoded flow records</h2>
+        <p>Fabric switches send sFlow, which copies raw packet headers. Routers and the firewall send IPFIX, which summarizes each flow. Colored cells show which layer a field came from; dashes mean that layer wasn't visible there.</p>
+      </div>
+      <button type="button" class="ghost" id="clear">Clear records</button>
+    </div>
+    <div class="coll-grid">
+      <div class="table-wrap" id="table-wrap">
+        <table>
+          <thead>
+            <tr class="grp">
+              <th rowspan="2">#</th>
+              <th rowspan="2">Exporter</th>
+              <th rowspan="2">Type</th>
+              <th colspan="3" class="g-out">Tunnel header</th>
+              <th class="g-vni">VXLAN</th>
+              <th colspan="3" class="g-in">Original packet</th>
+              <th colspan="2" class="g-enr">Added by enrichment</th>
+            </tr>
+            <tr>
+              <th>Src</th><th>Dst</th><th>Proto</th>
+              <th>VNI</th>
+              <th>Src IP</th><th>Dst IP</th><th>Ports</th>
+              <th>VRF / zone</th><th>Hosts</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="panel decode" id="decode"></div>
+    </div>
+  </section>
+
+  <section class="limits" aria-label="What flow data can and can't tell you">
+    <div class="sec-head"><div><p class="eyebrow">Reading the records</p><h2>What this data can and can't answer</h2></div></div>
+    <div class="lim-grid">
+      <div class="lim can">
+        <h3>Flow data can answer</h3>
+        <ul>
+          <li>Who is using a given spine or underlay link, by tenant, VNI, site or application</li>
+          <li>The full path of a conversation, from branch or internet edge to the server's port</li>
+          <li>Which public address a customer used, by joining edge, firewall NAT and fabric records</li>
+          <li>Whether ECMP is spreading load or a few large flows are piling onto one link</li>
+          <li>Traffic between segments or zones that are supposed to be isolated</li>
+        </ul>
+      </div>
+      <div class="lim cant">
+        <h3>Flow data can't answer</h3>
+        <ul>
+          <li>Per-packet loss, latency or jitter. Flow counts traffic; it doesn't time it.</li>
+          <li>Anything inside an encrypted tunnel, from the tunnel's own transit links</li>
+          <li>VM-to-VM traffic on the same host, which never reaches a switch port</li>
+          <li>Every short or tiny flow, since sampling can miss them</li>
+          <li>Who the person is, unless VPN, NAC or directory data is added</li>
+        </ul>
+      </div>
+    </div>
+    <p class="foot">This walkthrough records every hop so you can compare vantage points. Real switches sample roughly one packet in a few thousand, routers and firewalls usually export sampled or unsampled IPFIX, and the collector scales and joins it all.</p>
+  </section>
+</div>
+
+<script>
+(function(){
+const NS='http://www.w3.org/2000/svg';
+const reduced=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const NODES={
+  spine1:{t:'spine',label:'spine-01',lo:'10.0.0.1'},
+  spine2:{t:'spine',label:'spine-02',lo:'10.0.0.2'},
+  bleaf:{t:'leaf',label:'border-leaf',vtep:'10.255.0.14',vrfs:['PAY']},
+  leaf1:{t:'leaf',label:'leaf-01',vtep:'10.255.0.11',vrfs:['PAY']},
+  leaf2:{t:'leaf',label:'leaf-02',vtep:'10.255.0.12',vrfs:['PAY','ANL']},
+  leaf3:{t:'leaf',label:'leaf-03',vtep:'10.255.0.13',vrfs:['PAY']},
+  web1:{t:'host',label:'web-01',ip:'10.10.1.21',vrf:'PAY',vlan:10,vni:10010},
+  web2:{t:'host',label:'web-02',ip:'10.10.1.22',vrf:'PAY',vlan:10,vni:10010},
+  etl1:{t:'host',label:'etl-01',ip:'10.20.3.30',vrf:'ANL',vlan:30,vni:20030},
+  db1:{t:'host',label:'db-01',ip:'10.10.2.45',vrf:'PAY',vlan:20,vni:10020},
+  fw:{t:'edge',label:'fw-edge',sub:'firewall · NAT'},
+  inet:{t:'edge',label:'inet-edge',sub:'internet router'},
+  hub:{t:'edge',label:'wan-hub',sub:'SD-WAN hub'},
+  brtr:{t:'edge',label:'branch-rtr',sub:'SD-WAN edge'},
+  user:{t:'ext',label:'Internet user',ip:'203.0.113.50'},
+  laptop:{t:'ext',label:'Finance laptop',ip:'10.50.12.34'},
+  coll:{t:'coll',label:'Kentik'}
+};
+const VRF={PAY:{name:'PAYMENTS'},ANL:{name:'ANALYTICS'}};
+const EXPORTERS={spine1:'sFlow',spine2:'sFlow',bleaf:'sFlow',leaf1:'sFlow',leaf2:'sFlow',leaf3:'sFlow',fw:'IPFIX',inet:'IPFIX',hub:'IPFIX',brtr:'IPFIX'};
+const LINKS=[];
+['bleaf','leaf1','leaf2','leaf3'].forEach(l=>['spine1','spine2'].forEach(s=>LINKS.push([l,s,'under'])));
+[['web1','leaf1'],['web2','leaf2'],['etl1','leaf2'],['db1','leaf3']].forEach(([h,l])=>LINKS.push([h,l,'access']));
+LINKS.push(['fw','bleaf','edge'],['inet','fw','edge'],['hub','fw','edge'],['user','inet','net'],['laptop','brtr','edge'],['brtr','hub','wan']);
+const N=id=>NODES[id].label;
+const lid=(a,b)=>'ln-'+[a,b].sort().join('-');
+
+const G={vb:[1390,628],spine:{w:132,h:42},leaf:{w:160,h:72},host:{w:92,h:40},edge:{w:132,h:46},ext:{w:132,h:40},coll:{w:156,h:124},
+  pos:{spine1:[630,70],spine2:[870,70],bleaf:[440,230],leaf1:[640,230],leaf2:[860,230],leaf3:[1060,230],
+       web1:[640,390],web2:[800,390],etl1:[920,390],db1:[1060,390],
+       fw:[440,462],inet:[300,382],hub:[300,544],user:[97,382],laptop:[97,486],brtr:[97,572],coll:[1290,230]},
+  fs:{name:14,sub:10,chip:9,vtep:10,pk:10},pk:{iw:24,ih:12,ow:44,oh:22}};
+
+const SCN={
+  l2:{label:'Same subnet',short:'L2',src:'web1',dst:'web2',sip:'10.10.1.21',dip:'10.10.1.22',sport:51514,dport:8443,app:'app health check',
+      srcLeaf:'leaf1',dstLeaf:'leaf2',spine:'spine1',vtepS:'10.255.0.11',vtepD:'10.255.0.12',udp:53177,vni:10010,vniKind:'L2 VNI',
+      vniMeaning:'L2 VNI for the 10.10.1.0/24 subnet (VLAN 10)',vrfLabel:'PAYMENTS',
+      ethHost:'web-01 → web-02 MAC',ethWire:'web-01 → web-02 MAC',ethEgress:'web-01 → web-02 MAC',
+      egressNote:'Bridged traffic keeps its original MAC addresses end to end.'},
+  l3:{label:'Other subnet',short:'L3',src:'web1',dst:'db1',sip:'10.10.1.21',dip:'10.10.2.45',sport:51022,dport:5432,app:'PostgreSQL',
+      srcLeaf:'leaf1',dstLeaf:'leaf3',spine:'spine2',vtepS:'10.255.0.11',vtepD:'10.255.0.13',udp:49812,vni:50010,vniKind:'L3 VNI',
+      vniMeaning:'L3 VNI for VRF PAYMENTS',vrfLabel:'PAYMENTS',
+      ethHost:'web-01 → gateway MAC',ethWire:'leaf-01 → leaf-03 router MAC',ethEgress:'gateway → db-01 MAC',
+      egressNote:'leaf-03 rewrote the MAC addresses when it routed the packet. The IP header is unchanged from what web-01 sent.'},
+  xvrf:{label:'Other VRF',short:'VRF',src:'web1',dst:'etl1',sip:'10.10.1.21',dip:'10.20.3.30',sport:51800,dport:9092,app:'Kafka',
+      srcLeaf:'leaf1',vrfLabel:'PAYMENTS → ANALYTICS',flag:'cross-VRF',ethHost:'web-01 → gateway MAC'},
+  user:{label:'From internet',short:'NET',src:'user',dst:'web1',sip:'203.0.113.50',dip:'10.10.1.21',vip:'198.51.100.10',sport:61544,dport:443,app:'HTTPS',
+      srcLeaf:'bleaf',dstLeaf:'leaf1',spine:'spine1',vtepS:'10.255.0.14',vtepD:'10.255.0.11',udp:60218,vni:50010,vniKind:'L3 VNI',
+      vniMeaning:'L3 VNI for VRF PAYMENTS',vrfLabel:'PAYMENTS',hostsNote:'internal side from inventory tags; the outside IP gets ASN and geo',
+      ethHost:'fw-edge → border-leaf MAC',ethWire:'border-leaf → leaf-01 router MAC',ethEgress:'gateway → web-01 MAC',
+      egressNote:"The source is still the customer's real IP. The fabric never needed to know it came from outside."},
+  int:{label:'From a branch',short:'BR',src:'laptop',dst:'web2',sip:'10.50.12.34',dip:'10.10.1.22',sport:50233,dport:443,app:'finance portal (HTTPS)',
+      srcLeaf:'bleaf',dstLeaf:'leaf2',spine:'spine2',vtepS:'10.255.0.14',vtepD:'10.255.0.12',udp:57731,vni:50010,vniKind:'L3 VNI',
+      tunS:'192.0.2.10',tunD:'198.51.100.2',
+      vniMeaning:'L3 VNI for VRF PAYMENTS',vrfLabel:'PAYMENTS',hostsNote:'laptop subnet tagged as branch-12 in IPAM',
+      ethHost:'fw-edge → border-leaf MAC',ethWire:'border-leaf → leaf-02 router MAC',ethEgress:'gateway → web-02 MAC',
+      egressNote:"The source is still the laptop's own address, 10.50.12.34. Nothing between the branch and the server rewrote it."}
+};
+
+/* sample spec fields: dev, iface, dir, kind (inner|full|rec|esp), vantage, vlan, pub (dst is public VIP), nat (record holds both sides), zone, via, hosts */
+const STAGES={
+  l2:[
+    {at:'web1',toward:'leaf1',phase:'host',tags:['Overlay'],title:'web-01 sends a frame to web-02',
+     body:"Both servers are in VLAN 10, the same 10.10.1.0/24 subnet, but they sit on different racks. web-01 sends an ordinary Ethernet frame to web-02's MAC address. The server has no idea VXLAN exists."},
+    {move:['web1','leaf1'],phase:'host',tags:['sFlow'],title:'Into leaf-01 on Ethernet1',
+     body:"This is a server-facing port. A sample taken here sees only the original packet. There's no VXLAN header yet.",
+     sample:{dev:'leaf1',iface:'Ethernet1',dir:'in',kind:'inner',vlan:10,vantage:'src'}},
+    {at:'leaf1',toward:'web1',phase:'host',tags:['VNI'],title:'VLAN 10 maps to VNI 10010',
+     body:"leaf-01 maps its local VLAN 10 to the fabric-wide segment VNI 10010. VLAN numbers only matter on this one switch; the VNI is what the whole fabric agrees on. EVPN has already told leaf-01 that web-02's MAC lives behind VTEP 10.255.0.12 on leaf-02. Same subnet, so there's no routing and no VRF lookup."},
+    {at:'leaf1',toward:'spine1',phase:'encap',ecmp:true,tags:['VTEP','VNI','ECMP'],title:"leaf-01's VTEP encapsulates",
+     body:"The VTEP wraps the whole frame in new headers: outer IP 10.255.0.11 → 10.255.0.12, UDP to port 4789, and an 8-byte VXLAN header carrying VNI 10010. The outer UDP source port, 53177, is a hash of the inner headers. That's what lets ECMP spread different conversations across both spines."},
+    {move:['leaf1','spine1'],phase:'encap',tags:['ECMP','sFlow'],title:'Up to spine-01',
+     body:"Two equal-cost paths lead to leaf-02, and this flow's hash picked spine-01. A sample on this uplink carries both layers: VTEP to VTEP outside, web-01 to web-02 inside.",
+     sample:{dev:'leaf1',iface:'Ethernet49',dir:'out',kind:'full',vantage:'uplink'}},
+    {at:'spine1',toward:'leaf1',phase:'spine',tags:['Underlay','sFlow'],title:'The spine routes on the outer header only',
+     body:"spine-01 knows how to reach 10.255.0.12 and nothing else. It has no VRFs, no MAC tables and no idea what VNI 10010 is. A tool that reads only outer headers would report this as leaf-01 talking to leaf-02 on UDP 4789.",
+     sample:{dev:'spine1',iface:'Ethernet2',dir:'in',kind:'full',vantage:'spine'}},
+    {move:['spine1','leaf2'],phase:'down',tags:['Underlay'],title:'Down to leaf-02',
+     body:"Each underlay hop rewrites only the outer Ethernet header. The VTEP addresses and the VNI stay the same end to end."},
+    {at:'leaf2',toward:'spine1',phase:'decap',tags:['VTEP','VNI','sFlow'],title:"leaf-02's VTEP decapsulates",
+     body:"The outer destination is leaf-02's own VTEP address, so it strips the 50 bytes of outer headers. VNI 10010 says which segment the frame belongs to. leaf-02 maps it back to its local VLAN 10 and finds web-02's MAC on Ethernet1.",
+     sample:{dev:'leaf2',iface:'Ethernet49',dir:'in',kind:'full',vantage:'uplink-in'}},
+    {move:['leaf2','web2'],phase:'egress',tags:['sFlow'],title:'Out to web-02',
+     body:"Back to an ordinary frame on a server-facing port. This sample is inner-only again.",
+     sample:{dev:'leaf2',iface:'Ethernet1',dir:'out',kind:'inner',vlan:10,vantage:'dst'}},
+    {at:'web2',toward:'leaf2',phase:'egress',done:true,tags:['Overlay'],title:'Delivered',
+     body:"web-02 receives the exact frame web-01 sent. Same subnet on two racks, with no stretched VLAN and no Spanning Tree. The stitching strip below lines up the five samples that describe this one conversation."}
+  ],
+  l3:[
+    {at:'web1',toward:'leaf1',phase:'host',tags:['Overlay'],title:'web-01 opens a connection to db-01',
+     body:"db-01 is on a different subnet, 10.10.2.0/24, so web-01 hands the packet to its default gateway. Every leaf answers as the same anycast gateway, so the gateway is always the switch directly above the server."},
+    {move:['web1','leaf1'],phase:'host',tags:['sFlow'],title:'Into leaf-01 on Ethernet1',
+     body:"A sample on this server-facing port sees only the original packet: 10.10.1.21 → 10.10.2.45 on TCP 5432.",
+     sample:{dev:'leaf1',iface:'Ethernet1',dir:'in',kind:'inner',vlan:10,vantage:'src'}},
+    {at:'leaf1',toward:'web1',phase:'host',tags:['VRF'],title:'Route lookup inside VRF PAYMENTS',
+     body:"VLAN 10's gateway belongs to VRF PAYMENTS, so leaf-01 searches that VRF's routing table and no other. EVPN has advertised 10.10.2.45 in PAYMENTS from VTEP 10.255.0.13 on leaf-03. Another VRF could reuse 10.10.2.45 for a different machine and neither would notice."},
+    {at:'leaf1',toward:'spine2',phase:'encap',ecmp:true,tags:['VTEP','VNI','ECMP'],title:"Encapsulate with the VRF's L3 VNI",
+     body:"Routed traffic carries the VRF's L3 VNI, 50010, not the subnet's VNI. That number is how leaf-03 will know which VRF to route in. Outer header: 10.255.0.11 → 10.255.0.13, UDP 49812 → 4789. The inner MACs are now the two leaves' router MACs."},
+    {move:['leaf1','spine2'],phase:'encap',tags:['ECMP','sFlow'],title:'Up to spine-02',
+     body:"This flow's hash lands on spine-02. A different conversation between the same two leaves could take spine-01. The uplink sample carries both layers.",
+     sample:{dev:'leaf1',iface:'Ethernet50',dir:'out',kind:'full',vantage:'uplink'}},
+    {at:'spine2',toward:'leaf1',phase:'spine',tags:['Underlay','sFlow'],title:'spine-02 sees only leaf-01 → leaf-03',
+     body:"The spine routes on 10.255.0.13 and ignores everything inside. No VRFs, no tenants, no VNIs. Its sample still carries the inner headers, which is how Kentik can say who is using this spine.",
+     sample:{dev:'spine2',iface:'Ethernet2',dir:'in',kind:'full',vantage:'spine'}},
+    {move:['spine2','leaf3'],phase:'down',tags:['Underlay'],title:'Down to leaf-03',
+     body:"Each underlay hop rewrites only the outer Ethernet header. The VTEP addresses and the VNI stay the same end to end."},
+    {at:'leaf3',toward:'spine2',phase:'decap',tags:['VTEP','VNI','VRF','sFlow'],title:'Decapsulate: VNI 50010 means VRF PAYMENTS',
+     body:"leaf-03 strips the outer headers. VNI 50010 maps to VRF PAYMENTS, so it routes 10.10.2.45 in that table. The address is local: VLAN 20, VNI 10020, on Ethernet1.",
+     sample:{dev:'leaf3',iface:'Ethernet50',dir:'in',kind:'full',vantage:'uplink-in'}},
+    {move:['leaf3','db1'],phase:'egress',tags:['sFlow'],title:'Out to db-01',
+     body:"leaf-03 rewrites the MAC addresses for the last hop. The IP header is untouched.",
+     sample:{dev:'leaf3',iface:'Ethernet1',dir:'out',kind:'inner',vlan:20,vantage:'dst'}},
+    {at:'db1',toward:'leaf3',phase:'egress',done:true,tags:['Overlay'],title:'Delivered',
+     body:"Three VNIs touched this one connection: 10010 for web-01's subnet, 50010 on the wire, and 10020 for db-01's subnet. Only 50010 ever appears in flow data, which is why the collector needs to map VNIs back to VRFs and tenants."}
+  ],
+  xvrf:[
+    {at:'web1',toward:'leaf1',phase:'host',tags:['Overlay'],title:'web-01 tries to reach etl-01',
+     body:"etl-01 belongs to the analytics team, in VRF ANALYTICS. web-01 sends the packet to its default gateway like any off-subnet traffic: 10.10.1.21 → 10.20.3.30 on TCP 9092."},
+    {move:['web1','leaf1'],phase:'host',tags:['sFlow'],title:'Into leaf-01 on Ethernet1',
+     body:"Most switches take sFlow samples on ingress, before the forwarding decision. So traffic that's about to be dropped can still show up in flow data.",
+     sample:{dev:'leaf1',iface:'Ethernet1',dir:'in',kind:'inner',vlan:10,vantage:'src-drop'}},
+    {at:'leaf1',toward:'web1',phase:'drop',tags:['VRF','Dropped'],title:'No route in VRF PAYMENTS',
+     body:"leaf-01 looks up 10.20.3.30 in VRF PAYMENTS, the only table this port can use. That prefix exists only in VRF ANALYTICS, and no one configured route leaking between them, so there's no match. The packet is dropped at the first leaf. No encapsulation, no VNI, and nothing reaches the underlay."},
+    {at:'leaf1',toward:'web1',phase:'drop',done:true,tags:['sFlow','Enrichment'],title:'How this looks in Kentik',
+     body:"The single sample shows 10.10.1.21 → 10.20.3.30 on port 9092 with no VNI. With VRF and host tags it reads as PAYMENTS trying to reach ANALYTICS. A trickle of these points to a misconfigured app. If the same pair ever shows up with an outer header and a VNI, the traffic is crossing the fabric and segmentation has a hole."}
+  ],
+  user:[
+    {at:'user',toward:'inet',phase:'ext',tags:['North-south'],title:'A customer opens the payments site',
+     body:"Their browser connects from 203.0.113.50 to the site's public address, 198.51.100.10, on TCP 443. Nothing in this packet knows there's a VXLAN fabric behind that address."},
+    {move:['user','inet'],phase:'ext',tags:['North-south','IPFIX'],title:'Across the internet to the edge router',
+     body:"The packet crosses provider networks and reaches the data center's internet edge router. Its IPFIX record is the first thing the collector sees: customer 203.0.113.50 talking to the public address.",
+     sample:{dev:'inet',iface:'Te0/0/0',dir:'in',kind:'rec',pub:true,vantage:'inet',zone:'internet',via:'edge router interface',hosts:'Internet user → site VIP'}},
+    {move:['inet','fw'],phase:'ext',tags:['North-south'],title:'On to the edge firewall',
+     body:"Outside the fabric there's no VNI and no VTEP, just ordinary routed IP."},
+    {at:'fw',toward:'bleaf',phase:'host',tags:['NAT','IPFIX'],title:'The firewall checks policy and translates the address',
+     note:'The destination was rewritten from 198.51.100.10 by NAT. The source is still the customer.',
+     body:"The firewall allows HTTPS to the payments site, then rewrites the destination from the public 198.51.100.10 to web-01's real address, 10.10.1.21. Its IPFIX record holds both addresses, which makes it the one place the public and private sides meet.",
+     sample:{dev:'fw',iface:'untrust → payments',dir:'xlate',kind:'rec',nat:true,vantage:'fw-nat',zone:'untrust → PAYMENTS',via:'policy allow-web-443'}},
+    {move:['fw','bleaf'],phase:'host',tags:['sFlow'],title:'Into the border leaf',
+     body:"The border leaf is the fabric's front door. A sample on its firewall-facing port shows the customer IP talking to web-01's real address, before any VXLAN.",
+     sample:{dev:'bleaf',iface:'Ethernet1',dir:'in',kind:'inner',vantage:'edge'}},
+    {at:'bleaf',toward:'fw',phase:'host',tags:['VRF'],title:'Border leaf routes it in VRF PAYMENTS',
+     body:"The port facing the firewall belongs to VRF PAYMENTS, so the border leaf looks up 10.10.1.21 in that table. EVPN says it lives behind VTEP 10.255.0.11 on leaf-01. Each tenant usually gets its own firewall link or sub-interface, which is how outside traffic lands in the right VRF."},
+    {at:'bleaf',toward:'spine1',phase:'encap',ecmp:true,tags:['VTEP','VNI','ECMP'],title:'Into the tunnel with L3 VNI 50010',
+     body:"The border leaf's VTEP encapsulates exactly like any other leaf: outer 10.255.0.14 → 10.255.0.11, UDP 60218 → 4789, and VNI 50010 for VRF PAYMENTS. From here on, customer traffic looks the same as east-west traffic to the underlay."},
+    {move:['bleaf','spine1'],phase:'encap',tags:['ECMP','sFlow'],title:'Up to spine-01',
+     body:"The hash picks spine-01. This uplink is where north-south traffic first shows both layers: the border VTEP outside, the customer IP inside.",
+     sample:{dev:'bleaf',iface:'Ethernet49',dir:'out',kind:'full',vantage:'uplink'}},
+    {at:'spine1',toward:'bleaf',phase:'spine',tags:['Underlay','sFlow'],title:'spine-01 sees border-leaf → leaf-01',
+     body:"To the spine, a customer request and a database replication stream look identical: VTEP to VTEP on UDP 4789. Only the inner headers say this one came from the internet.",
+     sample:{dev:'spine1',iface:'Ethernet1',dir:'in',kind:'full',vantage:'spine'}},
+    {move:['spine1','leaf1'],phase:'down',tags:['Underlay'],title:'Down to leaf-01',
+     body:"Each underlay hop rewrites only the outer Ethernet header. The VTEP addresses and the VNI stay the same end to end."},
+    {at:'leaf1',toward:'spine1',phase:'decap',tags:['VTEP','VNI','VRF','sFlow'],title:'leaf-01 decapsulates and routes to web-01',
+     body:"VNI 50010 maps to VRF PAYMENTS. leaf-01 finds 10.10.1.21 on its local VLAN 10 and rewrites the MAC addresses for the last hop.",
+     sample:{dev:'leaf1',iface:'Ethernet49',dir:'in',kind:'full',vantage:'uplink-in'}},
+    {move:['leaf1','web1'],phase:'egress',tags:['sFlow'],title:'Out to web-01',
+     body:"An ordinary packet again on the server-facing port.",
+     sample:{dev:'leaf1',iface:'Ethernet1',dir:'out',kind:'inner',vlan:10,vantage:'dst'}},
+    {at:'web1',toward:'leaf1',phase:'egress',done:true,tags:['North-south'],title:'Delivered, and the east-west work starts',
+     body:"web-01 answers and the reply retraces the path. Serving the page usually means more calls to app servers and db-01 that never leave the fabric. In the stitching strip, the firewall's NAT record is the link that joins the two public-side records to the five fabric records."}
+  ],
+  int:[
+    {at:'laptop',toward:'brtr',phase:'host',eth:'laptop → branch-rtr MAC',tags:['North-south'],title:'An analyst at branch 12 opens the finance portal',
+     body:"The laptop has a private address, 10.50.12.34, and connects straight to web-02's real address, 10.10.1.22, on TCP 443. Internal users usually don't need NAT, so this source IP will survive all the way to the server."},
+    {move:['laptop','brtr'],phase:'host',eth:'laptop → branch-rtr MAC',tags:['IPFIX'],title:'Into the branch router',
+     body:"The branch's SD-WAN router exports IPFIX from its LAN interface. That record holds the laptop's real IP and the destination, before anything is encrypted.",
+     sample:{dev:'brtr',iface:'Gi0/1 (LAN)',dir:'in',kind:'rec',vantage:'br-lan',zone:'branch-12 LAN',via:'site tag from IPAM'}},
+    {at:'brtr',toward:'hub',phase:'ipsec',tags:['SD-WAN','Encrypted'],title:'SD-WAN encrypts it into an IPsec tunnel',
+     body:"SD-WAN is an overlay too. The router wraps the packet in a new IP header, 192.0.2.10 → 198.51.100.2, and encrypts everything inside with ESP. Unlike VXLAN, nobody in the middle can read the inner headers."},
+    {move:['brtr','hub'],phase:'ipsec',tags:['SD-WAN','IPFIX'],title:'Across the WAN',
+     body:"A record from the router's WAN side shows only the two tunnel endpoints and protocol ESP. That's why branch visibility has to come from the LAN side of the router, or from the SD-WAN controller.",
+     sample:{dev:'brtr',iface:'Gi0/0 (WAN)',dir:'out',kind:'esp',vantage:'br-wan',zone:'SD-WAN tunnel',via:'tunnel endpoints',hosts:'branch-12 → DC hub'}},
+    {at:'hub',toward:'brtr',phase:'host',eth:'wan-hub → fw-edge MAC',tags:['SD-WAN'],title:'The data center hub decrypts',
+     body:"The WAN hub ends the tunnel and recovers the original packet: 10.50.12.34 → 10.10.1.22 on TCP 443, unchanged."},
+    {move:['hub','fw'],phase:'host',eth:'wan-hub → fw-edge MAC',tags:['IPFIX'],title:'Toward the firewall',
+     body:"The hub's LAN-side record matches the branch router's LAN record exactly. The same 5-tuple on both sides of the tunnel is how the collector bridges the encrypted WAN.",
+     sample:{dev:'hub',iface:'Te0/1 (LAN)',dir:'out',kind:'rec',vantage:'hub',zone:'outside fabric',via:'WAN hub LAN side'}},
+    {at:'fw',toward:'bleaf',phase:'host',tags:['Policy','IPFIX'],title:'Internal firewall: users zone → PAYMENTS',
+     body:"The firewall checks that branch users may reach the portal on 443. There's no NAT, so source and destination pass through unchanged. Its IPFIX record adds what only the firewall knows: the zone pair and the policy that allowed it.",
+     sample:{dev:'fw',iface:'users → payments',dir:'allow',kind:'rec',vantage:'fw-int',zone:'users → PAYMENTS',via:'policy finance-portal'}},
+    {move:['fw','bleaf'],phase:'host',tags:['sFlow'],title:'Into the border leaf',
+     body:"The same packet the hub and firewall saw. Now it's the fabric's turn.",
+     sample:{dev:'bleaf',iface:'Ethernet1',dir:'in',kind:'inner',vantage:'edge'}},
+    {at:'bleaf',toward:'fw',phase:'host',tags:['VRF'],title:'Border leaf routes it in VRF PAYMENTS',
+     body:"The firewall-facing port belongs to VRF PAYMENTS, so the border leaf looks up 10.10.1.22 there. EVPN says it lives behind VTEP 10.255.0.12 on leaf-02."},
+    {at:'bleaf',toward:'spine2',phase:'encap',ecmp:true,tags:['VTEP','VNI','ECMP'],title:'Into the VXLAN tunnel with L3 VNI 50010',
+     body:"Outer 10.255.0.14 → 10.255.0.12, UDP 57731 → 4789, VNI 50010. This one packet has now ridden two different overlays: SD-WAN across the WAN, and VXLAN inside the data center."},
+    {move:['bleaf','spine2'],phase:'encap',tags:['ECMP','sFlow'],title:'Up to spine-02',
+     body:"The hash picks spine-02. The uplink sample carries both layers.",
+     sample:{dev:'bleaf',iface:'Ethernet50',dir:'out',kind:'full',vantage:'uplink'}},
+    {at:'spine2',toward:'bleaf',phase:'spine',tags:['Underlay','sFlow'],title:'spine-02 sees border-leaf → leaf-02',
+     body:"The spine routes on the outer header only. The inner source is still the laptop's 10.50.12.34, which is what ties this spine traffic to branch 12.",
+     sample:{dev:'spine2',iface:'Ethernet1',dir:'in',kind:'full',vantage:'spine'}},
+    {move:['spine2','leaf2'],phase:'down',tags:['Underlay'],title:'Down to leaf-02',
+     body:"Each underlay hop rewrites only the outer Ethernet header."},
+    {at:'leaf2',toward:'spine2',phase:'decap',tags:['VTEP','VNI','VRF','sFlow'],title:'leaf-02 decapsulates and routes to web-02',
+     body:"VNI 50010 maps to VRF PAYMENTS. leaf-02 finds 10.10.1.22 on its local VLAN 10 and sends it out Ethernet1.",
+     sample:{dev:'leaf2',iface:'Ethernet50',dir:'in',kind:'full',vantage:'uplink-in'}},
+    {move:['leaf2','web2'],phase:'egress',tags:['sFlow'],title:'Out to web-02',
+     body:"An ordinary packet again on the server-facing port.",
+     sample:{dev:'leaf2',iface:'Ethernet1',dir:'out',kind:'inner',vlan:10,vantage:'dst'}},
+    {at:'web2',toward:'leaf2',phase:'egress',done:true,tags:['North-south'],title:'Delivered: nine records, one conversation',
+     body:"Nine records from seven devices, two export formats and two overlays describe this one HTTPS connection. In the stitching strip, the 5-tuple bridges the encrypted SD-WAN tunnel, and the inner 5-tuple plus VNI bridges VXLAN."}
+  ]
+};
+
+const TAGC={VRF:'vrf',VNI:'vni',VTEP:'under',Underlay:'under',ECMP:'under',Overlay:'inner',sFlow:'flow',IPFIX:'flow',Enrichment:'flow',Dropped:'drop','North-south':'inner',NAT:'edge',Policy:'edge','SD-WAN':'tun',Encrypted:'tun'};
+const NOTES={
+  ext:"Still addressed to the public IP. NAT hasn't happened yet.",
+  host:'An ordinary packet: 54 bytes of headers, then data.',
+  encap:'The VTEP added 50 bytes in front of the original packet. That overhead is why fabric links usually run a 9,000-byte MTU.',
+  spine:'The spine reads only the outer IP. Everything below the VXLAN header is opaque to it.',
+  down:'Only the outer Ethernet header changed on this hop.',
+  decap:'Outer headers removed. The VNI has done its job: it told the leaf which segment or VRF this packet belongs to.',
+  ipsec:'The whole original packet is encrypted. Anything that looks at it in transit sees only the tunnel endpoints.',
+  drop:'The packet never left leaf-01, so the underlay never sees it.'
+};
+const SEG_FULL=[['Eth',14,'outer'],['IPv4',20,'outer'],['UDP',8,'outer'],['VX',8,'vxlan'],['Eth',14,'inner'],['IPv4',20,'inner'],['TCP',20,'inner'],['data',24,'payload']];
+const SEG_INNER=[['Eth',14,'inner'],['IPv4',20,'inner'],['TCP',20,'inner'],['payload',74,'payload']];
+
+const VANTAGE={
+  src:s=>`Taken on ${N(s.src)}'s server port before encapsulation. It shows who is talking, but not which tunnel or spine the traffic will use. The collector gets the VRF from the port's VLAN.`,
+  uplink:s=>`Taken on ${N(s.srcLeaf)}'s uplink right after encapsulation. Both layers are present, so the collector can tie ${s.sip} → ${s.dip} to VTEP ${s.vtepS} → ${s.vtepD} and to this exact link.`,
+  spine:s=>`${N(s.spine)} has no idea which tenant this is, yet its sample still carries the inner headers. This is the record that answers "who is using this spine link?"`,
+  'uplink-in':s=>`The same tunnel, seen where it lands. Records at both ends confirm which spine carried the conversation.`,
+  dst:s=>`Taken on ${N(s.dst)}'s server port after decapsulation. It confirms delivery to the right port and VLAN. No VXLAN headers remain.`,
+  'src-drop':s=>`This is the only sample the attempt will ever produce. There's no VNI or outer header because the packet was never encapsulated. VRF and host tags turn two IP addresses into "PAYMENTS tried to reach ANALYTICS."`,
+  edge:s=>s.vip?`Taken on the border leaf's firewall-facing port, before encapsulation. The destination is already web-01's real address. The firewall's NAT record is what links it back to ${s.vip}.`:`Taken on the border leaf's firewall-facing port, before encapsulation. The source is still the laptop's own IP, so this record already says "branch 12".`,
+  inet:s=>`The first record of the conversation. The internet edge router sees the customer's real IP and the public address ${s.vip}. It knows nothing about VRFs, VNIs or which server will answer.`,
+  'fw-nat':s=>`The firewall is the only device that sees both sides of NAT. Its record holds ${s.vip} and ${s.dip} together, which lets the collector join the outside records to everything inside the fabric.`,
+  'fw-int':s=>`No NAT here, so the 5-tuple matches the WAN hub's record exactly. The firewall adds what only it knows: the zone pair and the policy that allowed the traffic.`,
+  'br-lan':s=>`Taken on the branch LAN side, before encryption. This is the record that ties the conversation to branch 12 and to the laptop's IP.`,
+  'br-wan':s=>`Taken on the WAN side, after encryption. Only the tunnel endpoints and ESP are visible. That's the blind spot VXLAN would have if its inner headers were encrypted.`,
+  hub:s=>`The tunnel has been removed. The 5-tuple matches the branch LAN record exactly, which is how the collector bridges the encrypted WAN.`
+};
+
+const state={scn:'l3',i:0,active:false,playing:false,emitted:new Set(),rows:[],sel:null,speed:1,seq:0,live:0,freshId:null,run:0};
+let timers=[],anim=null,flights=[];
+const $=id=>document.getElementById(id);
+const svg=$('map');
+const box=id=>G[NODES[id].t];
+const pos=id=>G.pos[id];
+
+function exitPoint(id,other){
+  const [x,y]=pos(id),[ox,oy]=pos(other),d=box(id),m=G.pk.oh/2+3;
+  const dx=ox-x,dy=oy-y,hw=d.w/2+m,hh=d.h/2+m;
+  const t=Math.min(dx?hw/Math.abs(dx):Infinity,dy?hh/Math.abs(dy):Infinity,1);
+  return [x+dx*t,y+dy*t];
+}
+function sfPath(id){
+  const [x,y]=pos(id),d=box(id),[cx,cy]=G.pos.coll,c=G.coll,t=NODES[id].t;
+  if(t==='spine')return `M${x} ${y-d.h/2} C${x} 6, ${cx} 6, ${cx} ${cy-c.h/2}`;
+  const yb=y+d.h/2;
+  if(t==='leaf')return `M${x} ${yb} C${x} ${yb+52}, ${cx-30} ${yb+62}, ${cx-30} ${cy+c.h/2}`;
+  return `M${x} ${yb} C${x} 618, ${cx+30} 618, ${cx+30} ${cy+c.h/2}`;
+}
+const tw=(s,fs)=>s.length*fs*0.61;
+
+function nodeSVG(id){
+  const n=NODES[id],[x,y]=G.pos[id],d=G[n.t],fs=G.fs,x0=x-d.w/2,y0=y-d.h/2;
+  const R=`<rect class="n-box" x="${x0}" y="${y0}" width="${d.w}" height="${d.h}" rx="${n.t==='host'||n.t==='ext'?5:7}"/>`;
+  const exp=EXPORTERS[id]?`<text class="n-exp" x="${x0+d.w-6}" y="${y0-5}" text-anchor="end" font-size="8.5">${EXPORTERS[id]} ↗</text>`:'';
+  if(n.t==='spine'){
+    return `<g class="node n-spine" id="n-${id}">${R}${exp}
+      <text class="n-name" x="${x}" y="${y-2}" text-anchor="middle" font-size="${fs.name}">${n.label}</text>
+      <text class="n-sub" x="${x}" y="${y+fs.sub+4}" text-anchor="middle" font-size="${fs.sub}">underlay · ${n.lo}</text></g>`;
+  }
+  if(n.t==='leaf'){
+    const vt=`VTEP ${n.vtep}`,bh=fs.vtep+7,bw=tw(vt,fs.vtep)+12,ch=fs.chip+6,cy=y+d.h/2-ch/2-6;
+    const chips=n.vrfs.map(v=>({v,t:VRF[v].name,w:tw(VRF[v].name,fs.chip)+10}));
+    const total=chips.reduce((a,c)=>a+c.w,0)+(chips.length-1)*5;let cx=x-total/2;
+    const chipSVG=chips.map(c=>{const s=`<g class="vrf-chip ${c.v}"><rect x="${cx}" y="${cy-ch/2}" width="${c.w}" height="${ch}" rx="3"/><text x="${cx+c.w/2}" y="${cy+fs.chip*0.36}" text-anchor="middle" font-size="${fs.chip}">${c.t}</text></g>`;cx+=c.w+5;return s}).join('');
+    return `<g class="node n-leaf" id="n-${id}">${R}${exp}
+      <text class="n-name" x="${x}" y="${y0+fs.name+5}" text-anchor="middle" font-size="${fs.name}">${n.label}</text>
+      <rect class="vtep-badge" x="${x-bw/2}" y="${y+2-bh/2}" width="${bw}" height="${bh}" rx="3"/>
+      <text class="vtep-t" x="${x}" y="${y+2+fs.vtep*0.36}" text-anchor="middle" font-size="${fs.vtep}">${vt}</text>${chipSVG}</g>`;
+  }
+  if(n.t==='host'){
+    const ct=`VLAN ${n.vlan} → VNI ${n.vni}`,ch=fs.chip+6,cw=tw(ct,fs.chip)+10,cyy=y+d.h/2+5;
+    return `<g class="node n-host vrf-${n.vrf}" id="n-${id}">${R}
+      <text class="n-name" x="${x}" y="${y-3}" text-anchor="middle" font-size="${fs.name-1}">${n.label}</text>
+      <text class="n-sub" x="${x}" y="${y+fs.sub+2}" text-anchor="middle" font-size="${fs.sub}">${n.ip}</text>
+      <g class="vni-chip"><rect x="${x-cw/2}" y="${cyy}" width="${cw}" height="${ch}" rx="3"/><text x="${x}" y="${cyy+ch/2+fs.chip*0.36}" text-anchor="middle" font-size="${fs.chip}">${ct}</text></g></g>`;
+  }
+  if(n.t==='edge'||n.t==='ext'){
+    const sub=n.t==='ext'?n.ip:n.sub;
+    return `<g class="node n-${n.t}" id="n-${id}">${R}${exp}
+      <text class="n-name" x="${x}" y="${y-3}" text-anchor="middle" font-size="${fs.name-1}">${n.label}</text>
+      <text class="n-sub" x="${x}" y="${y+fs.sub+3}" text-anchor="middle" font-size="${fs.sub}">${sub}</text></g>`;
+  }
+  return `<g class="node n-coll" id="n-coll">${R}
+    <text class="n-eyebrow" x="${x}" y="${y-38}" text-anchor="middle" font-size="10">KENTIK</text>
+    <text class="n-name" x="${x}" y="${y-18}" text-anchor="middle" font-size="15">Flow collector</text>
+    <text class="n-sub" x="${x}" y="${y-2}" text-anchor="middle" font-size="10">sFlow · IPFIX</text>
+    <text class="n-count" id="coll-count" x="${x}" y="${y+36}" text-anchor="middle" font-size="30">${state.live}</text>
+    <text class="n-sub" x="${x}" y="${y+52}" text-anchor="middle" font-size="9.5">records decoded</text></g>`;
+}
+function zones(){
+  const z=(cls,x,y,w,h,label,lcls)=>`<rect class="zone ${cls}" x="${x}" y="${y}" width="${w}" height="${h}" rx="10"/><text class="zlab ${lcls||''}" x="${x+12}" y="${y+18}">${label}</text>`;
+  return `<path class="zone fab" d="M350 16 H1160 V448 H574 V322 H350 Z"/>
+    <text class="zlab fab" x="362" y="34">VXLAN FABRIC · OVERLAY + UNDERLAY</text>
+    ${z('',206,338,330,272,'DC EDGE · NO VXLAN')}
+    ${z('',18,338,160,90,'INTERNET')}
+    ${z('',18,442,160,168,'BRANCH 12')}
+    <text class="llab" x="192" y="594" text-anchor="middle">WAN</text>
+    <text class="llab" x="192" y="606" text-anchor="middle">IPsec</text>`;
+}
+function build(){
+  const [W,H]=G.vb,pk=G.pk;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  let s=zones();
+  s+=`<g>${Object.keys(EXPORTERS).map(id=>`<path id="sf-${id}" class="l-sflow" d="${sfPath(id)}"/>`).join('')}</g>`;
+  s+=`<g>${LINKS.map(([a,b,k])=>{const [x1,y1]=G.pos[a],[x2,y2]=G.pos[b];const cls=k==='access'?`l-access acc-${NODES[a].vrf}`:'l-'+k;return `<line id="${lid(a,b)}" class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`}).join('')}</g>`;
+  s+=`<g>${Object.keys(NODES).map(nodeSVG).join('')}</g>`;
+  s+=`<g id="pkt">
+    <rect class="pk-outer" x="${-pk.ow/2}" y="${-pk.oh/2}" width="${pk.ow}" height="${pk.oh}" rx="${pk.oh/2}"/>
+    <rect class="pk-vx" x="${-pk.ow/2+5}" y="${-pk.ih/2+1}" width="${pk.ih*0.55}" height="${pk.ih-2}" rx="1.5"/>
+    <rect class="pk-inner" x="${-pk.iw/2}" y="${-pk.ih/2}" width="${pk.iw}" height="${pk.ih}" rx="${pk.ih/2}"/>
+    <text class="pk-label" x="0" y="${-pk.oh/2-6}" text-anchor="middle" font-size="${G.fs.pk}"></text>
+    <g class="pk-x"><line x1="-9" y1="-9" x2="9" y2="9"/><line x1="9" y1="-9" x2="-9" y2="9"/></g>
+  </g><g id="flights"></g>`;
+  svg.innerHTML=s;
+}
+
+/* packet */
+function setPkt(x,y){const g=$('pkt');if(g)g.setAttribute('transform',`translate(${x.toFixed(1)},${y.toFixed(1)})`)}
+function setLook(st){
+  const g=$('pkt'),s=SCN[state.scn],pk=G.pk;
+  const enc=['encap','spine','down'].includes(st.phase),esp=st.phase==='ipsec';
+  const show=(sel,on)=>g.querySelector(sel).setAttribute('display',on?'inline':'none');
+  show('.pk-outer',enc||esp);show('.pk-vx',enc);show('.pk-label',enc||esp);show('.pk-x',st.phase==='drop');show('.pk-inner',!esp);
+  g.querySelector('.pk-outer').classList.toggle('esp',esp);
+  const lab=g.querySelector('.pk-label');lab.classList.toggle('esp',esp);
+  const inner=g.querySelector('.pk-inner');
+  inner.setAttribute('x',enc?(-pk.iw/2+4):(-pk.iw/2));
+  inner.classList.toggle('dim',st.phase==='spine');
+  if(enc)lab.textContent=`VNI ${s.vni}`;else if(esp)lab.textContent='IPsec · ESP';
+}
+function restPos(st){return st.move?exitPoint(st.move[1],st.move[0]):exitPoint(st.at,st.toward)}
+function movePacket(p0,p1,ms,cb){
+  const t0=performance.now();
+  const step=t=>{const k=Math.min(1,(t-t0)/ms),e=k<.5?4*k*k*k:1-Math.pow(-2*k+2,3)/2;
+    setPkt(p0[0]+(p1[0]-p0[0])*e,p0[1]+(p1[1]-p0[1])*e);
+    if(k<1)anim.raf=requestAnimationFrame(step);else{anim=null;cb&&cb()}};
+  anim={raf:requestAnimationFrame(step),end:p1};
+}
+function clearTimers(){timers.forEach(clearTimeout);timers=[];if(anim){cancelAnimationFrame(anim.raf);setPkt(anim.end[0],anim.end[1]);anim=null}stopDwell()}
+function panTo(id){
+  const w=$('map-scroll');if(!w||w.scrollWidth<=w.clientWidth+2)return;
+  const x=pos(id)[0]*svg.clientWidth/G.vb[0];
+  w.scrollTo({left:Math.max(0,x-w.clientWidth/2),behavior:reduced?'auto':'smooth'});
+}
+function setLive(st){
+  svg.querySelectorAll('line.live,line.ecmp').forEach(e=>e.classList.remove('live','ecmp'));
+  svg.querySelectorAll('.node.active').forEach(e=>e.classList.remove('active'));
+  if(st.move){const e=$(lid(st.move[0],st.move[1]));if(e)e.classList.add('live')}
+  if(st.ecmp){const s=SCN[state.scn];['spine1','spine2'].forEach(sp=>{const e=$(lid(s.srcLeaf,sp));if(e)e.classList.add('ecmp')})}
+  const n=$('n-'+(st.move?st.move[1]:st.at));if(n)n.classList.add('active');
+}
+
+/* caption & wire */
+function renderCaption(st,i){
+  const list=STAGES[state.scn],s=SCN[state.scn];
+  const tags=st.tags.map(t=>`<span class="tag t-${TAGC[t]||'edge'}">${t}</span>`).join('');
+  const hint=state.active?'':`<p class="hint">Press <b>Send packet</b> to play the “${s.label}” scenario, or step through it with the arrows. Arrow keys work too.</p>`;
+  $('caption').innerHTML=`<div class="cap-top"><span class="stepno">${s.label} · step ${i+1} of ${list.length}</span><span class="tags">${tags}</span></div>
+    <h2 class="cap-title">${st.title}</h2><p class="cap-body">${st.body}</p>${hint}
+    <div class="steps" aria-hidden="true">${list.map((_,k)=>`<i class="${k<i?'past':k===i?'cur':''}"></i>`).join('')}</div>
+    <div class="dwell" aria-hidden="true"><i id="dwell-bar"></i></div>`;
+}
+function hrow(h,cls){return `<li class="hrow L-${h.layer}${cls?' '+cls:''}"><span class="sw"></span><span class="hn">${h.name}</span><span class="hb">${h.b?h.b+' B':''}</span><span class="hv">${h.val}</span></li>`}
+function renderStack(st){
+  const s=SCN[state.scn],ph=st.phase,enc=['encap','spine','down'].includes(ph);
+  const ethVal=st.eth||(ph==='ext'?'ISP router MACs, rewritten every hop':ph==='egress'?s.ethEgress:(enc||ph==='decap')?s.ethWire:s.ethHost);
+  const pre=enc?'Inner ':'',dip=ph==='ext'?`${s.vip} (public)`:s.dip;
+  const inner=[{layer:'inner',name:pre+'Ethernet',val:ethVal,b:14},{layer:'inner',name:pre+'IPv4',val:`${s.sip} → ${dip}`,b:20},{layer:'inner',name:pre+'TCP',val:`${s.sport} → ${s.dport} · ${s.app}`,b:20},{layer:'payload',name:'Payload',val:'application data',b:0}];
+  let html='';
+  if(ph==='ipsec'){
+    const tun=[{layer:'tun',name:'Outer IPv4',val:`${s.tunS} → ${s.tunD} (SD-WAN tunnel)`,b:20},{layer:'tun',name:'ESP',val:'SPI 0x4f21a7c3',b:8}];
+    html+=`<li class="grp-label">Added by branch-rtr · IPsec</li>`+tun.map(h=>hrow(h,st.at?'new':'')).join('');
+    html+=`<li class="grp-label">Original packet · encrypted</li>`+inner.slice(1).map(h=>hrow({...h,name:h.name,val:'encrypted'},'dim')).join('');
+  }else if(enc){
+    const oe=ph==='down'?`${N(s.spine)} → ${N(s.dstLeaf)}`:`${N(s.srcLeaf)} → ${N(s.spine)}`;
+    const outer=[{layer:'outer',name:'Outer Ethernet',val:oe,b:14},{layer:'outer',name:'Outer IPv4',val:`${s.vtepS} → ${s.vtepD} (VTEPs)`,b:20},{layer:'outer',name:'Outer UDP',val:`${s.udp} → 4789`,b:8},{layer:'vxlan',name:'VXLAN',val:`VNI ${s.vni} · ${s.vniKind}`,b:8}];
+    const isNew=ph==='encap'&&st.at;
+    html+=`<li class="grp-label">Added by ${N(s.srcLeaf)}'s VTEP · 50 B</li>`+outer.map(h=>hrow(h,isNew?'new':'')).join('');
+    html+=`<li class="grp-label">Original packet</li>`+inner.map(h=>hrow(h,ph==='spine'?'dim':'')).join('');
+  }else html+=inner.map(h=>hrow(h,'')).join('');
+  if(ph==='drop')html+=`<li class="dropbar">Dropped at ${N(s.srcLeaf)}: no route to ${s.dip} in VRF PAYMENTS</li>`;
+  const ol=$('stack');ol.innerHTML=html;ol.classList.toggle('dropped',ph==='drop');
+  $('wire-bytes').textContent=ph==='drop'?'dropped':ph==='ipsec'?'ESP · encrypted':enc?'104 B of headers':'54 B of headers';
+  $('stack-note').textContent=st.note||(ph==='egress'?s.egressNote:(NOTES[ph]||''));
+}
+
+/* playback */
+const TRAVEL=1150;
+function dwellFor(st){return Math.min(11000,Math.max(3000,st.body.length*38))/state.speed}
+function startDwell(ms){const b=$('dwell-bar');if(!b||reduced)return;b.style.transition='none';b.style.width='0';void b.offsetWidth;b.style.transition=`width ${ms}ms linear`;b.style.width='100%'}
+function stopDwell(){const b=$('dwell-bar');if(b){b.style.transition='none';b.style.width='0'}}
+function showStage(i,animate){
+  clearTimers();
+  const list=STAGES[state.scn];i=Math.max(0,Math.min(list.length-1,i));state.i=i;
+  const st=list[i];
+  renderCaption(st,i);renderStack(st);setLive(st);setLook(st);
+  panTo(st.move?st.move[1]:st.at);
+  if(st.sample&&state.active&&!state.emitted.has(i)){state.emitted.add(i);emitSample(st.sample)}
+  if(st.move&&animate&&!reduced){
+    movePacket(exitPoint(st.move[0],st.move[1]),exitPoint(st.move[1],st.move[0]),TRAVEL/state.speed,()=>afterStage(st,true));
+  }else{const p=restPos(st);setPkt(p[0],p[1]);afterStage(st,false)}
+  updateButtons();
+}
+function afterStage(st,travelled){
+  if(!state.playing)return;
+  if(st.done){state.playing=false;updateButtons();return}
+  let d=dwellFor(st);if(st.move&&travelled)d=Math.max(700,d-TRAVEL/state.speed);
+  startDwell(d);
+  timers.push(setTimeout(()=>showStage(state.i+1,true),d));
+}
+function startRun(play){
+  if(state.rows.length&&state.rows.every(r=>r.example)){state.rows=[];state.sel=null}
+  state.run++;state.active=true;state.emitted=new Set();state.playing=play;
+  renderTable();renderDecode();renderChain();
+  showStage(0,play);
+}
+function pause(){state.playing=false;clearTimers();updateButtons()}
+function updateButtons(){
+  const list=STAGES[state.scn];
+  $('prev').disabled=state.i===0;
+  $('next').disabled=state.active&&state.i>=list.length-1;
+  $('play').setAttribute('aria-label',state.playing?'Pause':'Play');
+  $('play-ico').innerHTML=state.playing?'<rect x="3.5" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="9.5" y="3" width="3" height="10" rx="1" fill="currentColor"/>':'<path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/>';
+  $('send').querySelector('span').textContent=state.active?'Send again':'Send packet';
+  document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-checked',b.dataset.scn===state.scn?'true':'false'));
+}
+
+/* records */
+function makeRow(scnKey,smp,example,run){
+  const s=SCN[scnKey],k=smp.kind;
+  const tunnel=k==='full'?{src:s.vtepS,dst:s.vtepD,p:`UDP ${s.udp} → 4789`,cls:'c-out'}:k==='esp'?{src:s.tunS,dst:s.tunD,p:'ESP (50)',cls:'c-tun'}:null;
+  const via=smp.via||(k==='full'?`VNI ${s.vni}`:smp.vlan?`${smp.iface}, VLAN ${smp.vlan}`:`${smp.iface}, routed port`);
+  const zone=smp.zone||s.vrfLabel;
+  return {id:++state.seq,run,scn:scnKey,example:!!example,dev:smp.dev,iface:smp.iface,dir:smp.dir,kind:k,vantage:smp.vantage,
+    proto:EXPORTERS[smp.dev],tunnel,vni:k==='full'?s.vni:null,
+    iSrc:k==='esp'?null:s.sip,iDst:k==='esp'?null:(smp.pub?s.vip:s.dip),pub:!!smp.pub,nat:!!smp.nat,
+    dstNote:smp.pub?'public address':smp.nat?`pre-NAT ${s.vip}`:'',sport:s.sport,dport:s.dport,
+    zone,via,hosts:smp.hosts||`${N(s.src)} → ${N(s.dst)}`};
+}
+function emitSample(smp){
+  const row=makeRow(state.scn,smp,false,state.run),path=$('sf-'+smp.dev);
+  if(reduced||!path){addRow(row);return}
+  const len=path.getTotalLength(),g=document.createElementNS(NS,'g');
+  g.innerHTML=`<rect class="flt" x="-5" y="-5" width="10" height="10" transform="rotate(45)"/>`;
+  $('flights').appendChild(g);path.classList.add('live');
+  const f={row,el:g,path,done:false},t0=performance.now(),dur=(row.proto==='IPFIX'?1700:1300)/state.speed;
+  flights.push(f);
+  const step=t=>{if(f.done)return;const k=Math.min(1,(t-t0)/dur),e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2,p=path.getPointAtLength(e*len);
+    g.setAttribute('transform',`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`);
+    if(k<1)f.raf=requestAnimationFrame(step);else finishFlight(f)};
+  f.raf=requestAnimationFrame(step);
+}
+function finishFlight(f){
+  if(f.done)return;f.done=true;cancelAnimationFrame(f.raf);f.el.remove();
+  flights=flights.filter(o=>o!==f);
+  if(!flights.some(o=>o.path===f.path))f.path.classList.remove('live');
+  addRow(f.row);
+  const c=$('n-coll');if(c){c.classList.remove('pulse');void c.getBBox();c.classList.add('pulse')}
+}
+function addRow(row){
+  state.rows.push(row);if(state.rows.length>60)state.rows.shift();
+  if(!row.example){state.live++;const c=$('coll-count');if(c)c.textContent=state.live}
+  state.sel=row.id;state.freshId=row.id;renderTable();renderDecode();renderChain();
+  const w=$('table-wrap');w.scrollTop=w.scrollHeight;
+}
+function cell(v,cls){return v==null?'<td class="na">—</td>':`<td class="${cls}">${v}</td>`}
+function renderTable(){
+  const tb=$('tbody');
+  if(!state.rows.length){tb.innerHTML='<tr class="empty"><td colspan="13">No records yet. Press Send packet and watch them arrive from each device.</td></tr>';return}
+  let lastRun=null,html='';
+  state.rows.forEach(r=>{
+    const s=SCN[r.scn];
+    if(r.run!==lastRun){lastRun=r.run;html+=`<tr class="runsep"><td colspan="13">${r.example?'Example run':'Run '+r.run} · ${s.label}</td></tr>`}
+    const enc=r.kind==='esp';
+    html+=`<tr data-id="${r.id}" tabindex="0" class="${r.id===state.sel?'sel':''} ${r.id===state.freshId?'fresh':''}">
+      <td class="num">${r.id}</td>
+      <td class="exp"><b>${N(r.dev)}</b><small>${r.iface} · ${r.dir}</small></td>
+      <td><span class="rt ${r.proto==='sFlow'?'sflow':'ipfix'}">${r.proto}</span></td>
+      ${r.tunnel?`<td class="${r.tunnel.cls}">${r.tunnel.src}</td><td class="${r.tunnel.cls}">${r.tunnel.dst}</td><td class="${r.tunnel.cls}">${r.tunnel.p}</td>`:cell(null)+cell(null)+cell(null)}
+      ${cell(r.vni,'c-vni')}
+      ${enc?'<td class="enc" colspan="3">encrypted, not visible</td>':`${cell(r.iSrc,'c-in')}<td class="c-in">${r.iDst}${r.dstNote?`<small>${r.dstNote}</small>`:''}</td>${cell(`TCP ${r.sport} → ${r.dport}`,'c-in')}`}
+      <td class="c-enr"><b>${r.zone}</b><small>via ${r.via}</small></td>
+      <td class="c-enr">${r.hosts}${s.flag?`<span class="flag">${s.flag}</span>`:''}</td></tr>`;
+  });
+  tb.innerHTML=html;state.freshId=null;
+}
+function joinLabel(a,b){
+  if(b.kind==='esp')return['Encrypted: only tunnel endpoints visible',true];
+  if(a.kind==='esp')return['Same 5-tuple found again after decryption',false];
+  if(a.pub&&b.nat)return['NAT record matches the public side',false];
+  if(a.nat&&!b.pub)return[`NAT record maps to ${b.iDst}`,false];
+  if(a.kind!=='full'&&b.kind==='full')return['Inner 5-tuple matches · adds VTEPs + VNI',false];
+  if(a.kind==='full'&&b.kind==='full')return['Same VTEP pair, VNI and inner 5-tuple',false];
+  if(a.kind==='full'&&b.kind!=='full')return['Inner 5-tuple matches after decap',false];
+  return['Same 5-tuple',false];
+}
+function renderChain(){
+  const el=$('chain');
+  const cur=state.rows.find(x=>x.id===state.sel);
+  const run=cur?cur.run:(state.rows.length?state.rows[state.rows.length-1].run:null);
+  const rows=state.rows.filter(r=>r.run===run);
+  if(!rows.length){el.innerHTML='<div class="chain-empty">Send a packet to see its records line up here.</div>';return}
+  el.innerHTML=rows.map((r,i)=>{
+    let kv='';
+    if(r.tunnel)kv+=`<div class="kv"><span>tunnel</span> ${r.tunnel.src} → ${r.tunnel.dst}</div>`;
+    if(r.vni)kv+=`<div class="kv"><span>VNI</span> ${r.vni}</div>`;
+    kv+=r.kind==='esp'?'<div class="kv"><span>inner</span> encrypted</div>':`<div class="kv"><span>${r.kind==='full'?'inner':'flow'}</span> ${r.iSrc} → ${r.iDst}</div>`;
+    kv+=`<div class="kv"><span>${r.proto==='IPFIX'?'zone':'vrf'}</span> ${r.zone}</div>`;
+    const card=`<button type="button" class="hop k-${r.kind}${r.id===state.sel?' sel':''}" data-id="${r.id}"><div class="hop-top"><b>${N(r.dev)}</b><span class="pr">${r.proto}</span></div>${kv}</button>`;
+    if(i===0)return card;
+    const [lab,warn]=joinLabel(rows[i-1],r);
+    return `<div class="join${warn?' warn':''}"><span>${lab}</span></div>${card}`;
+  }).join('');
+}
+function renderDecode(){
+  const bx=$('decode'),r=state.rows.find(x=>x.id===state.sel);
+  if(!r){bx.innerHTML='<div class="ph"><h3>Record decode</h3></div><p class="note">Tap a record in the table or the strip above to see what it captured and what each layer contributes.</p>';return}
+  const s=SCN[r.scn],k=r.kind;
+  const grp=(cls,title,items,absent)=>`<div class="fg L-${cls}${absent?' absent':''}"><h4>${title}</h4>${absent?`<p>${absent}</p>`:`<dl>${items.map(([a,b])=>`<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>`}</div>`;
+  const kindLab={full:'sFlow · both layers',inner:'sFlow · original only',rec:'IPFIX flow record',esp:'IPFIX · tunnel only'}[k];
+  let top='',fields='';
+  if(k==='full'||k==='inner'){
+    const segs=k==='full'?SEG_FULL:SEG_INNER;
+    top=`<div class="bytes"><div class="bar" role="img" aria-label="${k==='full'?104:54} bytes of headers in a 128-byte sample">${segs.map(([l,b,layer])=>`<span class="bseg L-${layer}" style="flex:${b} 0 0">${l}</span>`).join('')}</div>
+      <div class="ticks"><span>0</span><span>32</span><span>64</span><span>96</span><span>128 B cut-off</span></div></div>
+      <p class="note">${k==='full'?'sFlow copies the first 128 bytes of the packet. VXLAN puts 50 bytes in front of the original, and the inner TCP header still fits with 24 bytes to spare. With IPv6 on both layers the inner ports fall past the cut-off, so raise the header size where the switch supports it.':'sFlow copies the first 128 bytes of the packet. No VXLAN headers here, so 54 bytes of headers fit easily and the rest is payload.'}</p>`;
+    fields+=grp('outer','Tunnel header',k==='full'?[['Src VTEP',`${s.vtepS}<small>${N(s.srcLeaf)}</small>`],['Dst VTEP',`${s.vtepD}<small>${N(s.dstLeaf)}</small>`],['UDP',`${s.udp} → 4789<small>The source port is an ECMP hash of the inner headers.</small>`]]:null,k==='full'?null:'Not present. This sample came from a port outside the VXLAN tunnel.');
+    fields+=grp('vxlan','VXLAN header',k==='full'?[['VNI',`${s.vni}<small>${s.vniMeaning}</small>`]]:null,k==='full'?null:'No VNI. The collector uses the interface and VLAN to place this traffic instead.');
+  }else if(k==='rec'){
+    top=`<p class="note">Routers and firewalls usually export IPFIX or NetFlow: one summary per flow with packet and byte counts, start and end times and interfaces. There are no raw headers to decode, and nothing outside the fabric has a VNI.</p>`;
+  }else{
+    top=`<p class="note">This record describes the encrypted SD-WAN tunnel itself. The original packet is hidden inside ESP, so not even its addresses are visible here.</p>`;
+    fields+=grp('tun','SD-WAN tunnel',[['Src',`${s.tunS}<small>branch-rtr WAN address</small>`],['Dst',`${s.tunD}<small>wan-hub WAN address</small>`],['Protocol','ESP (IP protocol 50)']]);
+  }
+  if(k==='esp')fields+=grp('inner','Original packet',null,'Encrypted. The collector can only link this record to the conversation by tunnel, site and time.');
+  else{
+    const items=[['Src IP',r.iSrc],['Dst IP',r.iDst+(r.pub?'<small>public address, before NAT</small>':'')],['Protocol',`TCP ${s.sport} → ${s.dport}<small>${s.app}</small>`]];
+    if(r.nat)items.splice(1,1,['Pre-NAT dst',s.vip],['Post-NAT dst',`${s.dip}<small>the firewall exports both sides of the translation</small>`]);
+    fields+=grp('inner','Original packet',items);
+  }
+  fields+=grp('enr','Added by enrichment',[[k==='full'||k==='inner'?'VRF':'Zone',`${r.zone}<small>from ${r.via}</small>`],['Hosts',`${r.hosts}<small>${s.hostsNote||'from IPAM and inventory tags'}</small>`],['Seen at',`${N(r.dev)} ${r.iface} ${r.dir}`]]);
+  bx.innerHTML=`<div class="ph"><h3>Record ${r.id} · ${N(r.dev)}</h3><span class="kind ${k}">${kindLab}</span></div>${top}<div class="fgs">${fields}</div><p class="vantage">${(VANTAGE[r.vantage]||(()=>''))(s)}</p>`;
+}
+
+/* events */
+$('send').addEventListener('click',()=>startRun(true));
+$('play').addEventListener('click',()=>{
+  if(state.playing){pause();return}
+  if(!state.active||state.i>=STAGES[state.scn].length-1){startRun(true);return}
+  state.playing=true;updateButtons();afterStage(STAGES[state.scn][state.i],false);
+});
+$('next').addEventListener('click',()=>{
+  if(!state.active){startRun(false);showStage(1,true);return}
+  pause();showStage(state.i+1,true);
+});
+$('prev').addEventListener('click',()=>{pause();showStage(state.i-1,false)});
+$('speed').addEventListener('click',()=>{const o=[1,2,0.5];state.speed=o[(o.indexOf(state.speed)+1)%o.length];$('speed').textContent=(state.speed===0.5?'½':state.speed)+'×'});
+document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{
+  if(b.dataset.scn===state.scn&&state.active)return;
+  pause();state.scn=b.dataset.scn;state.active=false;state.emitted=new Set();showStage(0,false);
+}));
+document.querySelectorAll('.gcard').forEach(c=>c.addEventListener('click',()=>{
+  const on=c.getAttribute('aria-pressed')!=='true';
+  document.querySelectorAll('.gcard').forEach(o=>o.setAttribute('aria-pressed','false'));
+  svg.classList.remove('hl-vrf','hl-vni','hl-vtep');
+  if(on){c.setAttribute('aria-pressed','true');svg.classList.add('hl-'+c.dataset.hl)}
+}));
+$('clear').addEventListener('click',()=>{state.rows=[];state.sel=null;renderTable();renderDecode();renderChain()});
+const pick=id=>{if(!id)return;state.sel=+id;renderTable();renderDecode();renderChain()};
+$('tbody').addEventListener('click',e=>{const tr=e.target.closest('tr[data-id]');if(tr)pick(tr.dataset.id)});
+$('tbody').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){const tr=e.target.closest('tr[data-id]');if(tr){e.preventDefault();pick(tr.dataset.id)}}});
+$('chain').addEventListener('click',e=>{const h=e.target.closest('.hop');if(h)pick(h.dataset.id)});
+document.addEventListener('keydown',e=>{
+  if(e.target.closest&&e.target.closest('tbody,.chain'))return;
+  if(e.key==='ArrowRight'){e.preventDefault();$('next').click()}
+  else if(e.key==='ArrowLeft'){e.preventDefault();$('prev').click()}
+});
+
+/* initial state: an example run already in the logbook */
+build();
+STAGES.l3.forEach(st=>{if(st.sample)state.rows.push(makeRow('l3',st.sample,true,0))});
+state.sel=state.rows.find(r=>r.vantage==='spine').id;
+showStage(0,false);
+renderTable();renderDecode();renderChain();updateButtons();
+})();
+</script>
+
+</body>
+</html>
