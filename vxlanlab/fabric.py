@@ -216,3 +216,41 @@ class Fabric:
             out[h.leaf][ifindex(h.port)] = {"name": h.port, "speed": 25_000_000_000,
                                             "desc": "%s (VLAN %d)" % (h.name, h.vlan)}
         return out
+
+    # ------------------------------------------------------------ LLDP
+
+    def lldp_neighbors(self) -> Dict[str, Dict[int, Dict]]:
+        """What each switch would hear over LLDP, per device: local ifIndex -> neighbor.
+
+        Fabric links are learned from both ends (spine downlinks, leaf uplinks), so a
+        poller that walks every switch sees each link twice, once from each side, just
+        like a real fabric. Servers and the firewall are neighbors too, but they don't
+        answer SNMP themselves.
+        """
+        out: Dict[str, Dict[int, Dict]] = {name: {} for name in self.devices}
+
+        def switch(peer: str, port: str) -> Dict:
+            p = self.devices[peer]
+            return {"sys_name": peer, "chassis_mac": p.mac, "port": port,
+                    "port_desc": "", "mgmt_ip": p.mgmt_ip, "caps": "bridge,router",
+                    "kind": "switch"}
+
+        for d in self.devices.values():
+            for peer, port in d.uplinks.items():
+                n = switch(peer, self.devices[peer].downlinks[d.name])
+                n["port_desc"] = "downlink to %s" % d.name
+                out[d.name][ifindex(port)] = n
+            for peer, port in d.downlinks.items():
+                n = switch(peer, self.devices[peer].uplinks[d.name])
+                n["port_desc"] = "uplink to %s" % d.name
+                out[d.name][ifindex(port)] = n
+            for i, (vrf, port) in enumerate(sorted(d.edge_ports.items(), key=lambda kv: kv[1])):
+                out[d.name][ifindex(port)] = {
+                    "sys_name": "fw-edge", "chassis_mac": self.fw_mac,
+                    "port": "ethernet1/%d" % (i + 1), "port_desc": "%s inside" % vrf,
+                    "mgmt_ip": None, "caps": "router", "kind": "firewall"}
+        for h in self.hosts.values():
+            out[h.leaf][ifindex(h.port)] = {
+                "sys_name": h.name, "chassis_mac": h.mac, "port": "eth0",
+                "port_desc": "eth0", "mgmt_ip": h.ip, "caps": "station", "kind": "server"}
+        return out

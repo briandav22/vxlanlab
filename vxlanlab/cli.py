@@ -13,6 +13,7 @@ import time
 from typing import Dict, List
 
 from . import __version__, sflow
+from .snmp import SnmpServer
 from .engine import Engine, Exporter
 from .fabric import DEFAULT_TOPOLOGY, Fabric
 
@@ -110,6 +111,15 @@ def cmd_run(args) -> int:
         for n in name.split(","):
             if n:
                 engine.set_inject(n.strip(), True)
+    snmp = None
+    if args.snmp:
+        try:
+            snmp = SnmpServer(fabric, port=args.snmp_port, community=args.community,
+                              boots={n: e.boot for n, e in engine.exporters.items()},
+                              counters=engine.counters).start()
+        except OSError as e:
+            _snmp_bind_error(e, args.snmp_port)
+            return 1
 
     print("vxlanlab %s: %d exporters -> %s:%d, sampling 1:%d, scale %.2fx, source mode %s"
           % (__version__, len(engine.exporters), args.collector, args.port, engine.sample_rate,
@@ -119,6 +129,10 @@ def cmd_run(args) -> int:
     on = [n for n, v in engine.active.items() if v]
     if on:
         print("Injects on: " + ", ".join(on))
+    if snmp:
+        print("SNMP v1/v2c on UDP %d at each agent IP, community %r (sysName, IF-MIB, LLDP-MIB)"
+              % (args.snmp_port, args.community or fabric.cfg.get("snmp", {}).get("community",
+                                                                                  "public")))
 
     stop = threading.Event()
     if sys.stdin.isatty() and not args.no_console:
@@ -162,6 +176,53 @@ def cmd_run(args) -> int:
     except KeyboardInterrupt:
         pass
     _print_status(engine)
+    if snmp:
+        print("SNMP requests answered: " + ", ".join("%s=%d" % kv for kv in snmp.stats().items()))
+        snmp.close()
+    return 0
+
+
+# ------------------------------------------------------------------ snmp
+
+def _snmp_bind_error(e: OSError, port: int) -> None:
+    print("Could not start SNMP on UDP %d: %s" % (port, e), file=sys.stderr)
+    if port < 1024:
+        print("Port %d needs root. Run with sudo, or pick a high port with --snmp-port." % port,
+              file=sys.stderr)
+    print("Each switch answers on its own mgmt IP, so the aliases must exist:\n"
+          "  sudo python3 -m vxlanlab aliases --apply", file=sys.stderr)
+
+
+def cmd_snmp(args) -> int:
+    """SNMP only, no traffic. Interface counters stay at zero; use run --snmp for live ones."""
+    fabric = _fabric(args)
+    if args.show:
+        nbrs = fabric.lldp_neighbors()
+        ifs = fabric.interfaces()
+        print("%-12s %-12s %-16s %-12s %s" % ("Device", "Local port", "Neighbor", "Remote port",
+                                             "Kind"))
+        for dev, ports in nbrs.items():
+            for idx, n in sorted(ports.items()):
+                print("%-12s %-12s %-16s %-12s %s" % (dev, ifs[dev][idx]["name"], n["sys_name"],
+                                                     n["port"], n["kind"]))
+        return 0
+    try:
+        server = SnmpServer(fabric, port=args.port, community=args.community)
+    except OSError as e:
+        _snmp_bind_error(e, args.port)
+        return 1
+    community = args.community or fabric.cfg.get("snmp", {}).get("community", "public")
+    print("vxlanlab %s: SNMP v1/v2c, community %r. Interface counters stay at 0 in this mode;"
+          % (__version__, community))
+    print("run the fabric with `run --snmp` instead to serve live counters.")
+    for name, addr in server.addresses.items():
+        print("  %-12s %s" % (name, addr))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    print("SNMP requests answered: " + ", ".join("%s=%d" % kv for kv in server.stats().items()))
+    server.close()
     return 0
 
 
@@ -403,7 +464,17 @@ def main(argv=None) -> int:
     r.add_argument("--quiet", action="store_true")
     r.add_argument("--no-console", action="store_true", help="don't read inject commands from stdin")
     r.add_argument("--dry-run", action="store_true", help="build datagrams but don't send them")
+    r.add_argument("--snmp", action="store_true",
+                   help="also answer SNMP on each agent IP (sysName, IF-MIB, LLDP-MIB). Port 161 needs sudo")
+    r.add_argument("--snmp-port", type=int, default=161, help="SNMP UDP port (default 161)")
+    r.add_argument("--community", help="SNMP community (default: topology snmp.community, else public)")
     r.set_defaults(func=cmd_run)
+
+    sn = sub.add_parser("snmp", help="answer SNMP only (no traffic), or --show the LLDP neighbor table")
+    sn.add_argument("--port", type=int, default=161, help="UDP port (default 161, needs sudo)")
+    sn.add_argument("--community", help="community (default: topology snmp.community, else public)")
+    sn.add_argument("--show", action="store_true", help="print what LLDP-MIB reports, then exit")
+    sn.set_defaults(func=cmd_snmp)
 
     d = sub.add_parser("devices", help="list the exporters to add in Kentik")
     d.add_argument("--csv", action="store_true")
