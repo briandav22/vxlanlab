@@ -37,7 +37,7 @@ For each row, add a device in Kentik:
 | Sending IP | The `Sending IP` column (192.168.250.1, .2, .14, .11, .12, .13) |
 | Sample rate | 1024 (the lab also puts it in every sample) |
 | Collection | Your Universal Agent |
-| SNMP | Off. The lab doesn't run SNMP |
+| SNMP | Optional. On if you run the lab with `--snmp` (section 1.6): v2c, community `public`, polling IP = the sending IP |
 
 Kentik matches flow to a device by the IP the datagrams come from. That's why
 each fake switch needs its own source IP, which `aliases --apply` sets up.
@@ -89,9 +89,10 @@ minutes. If not, see Troubleshooting at the end.
 
 ### 1.5 Make it read like a real network (optional)
 
-- **Interface names.** With no SNMP, interfaces show by ifIndex. Ethernet1 is
+- **Interface names.** Without SNMP, interfaces show by ifIndex. Ethernet1 is
   1, Ethernet49 and 50 are the spine uplinks. `devices` prints which server
-  sits on which port.
+  sits on which port. With SNMP on (section 1.6) Kentik picks up the names,
+  speeds and descriptions itself.
 - **Name the VTEPs and tenants.** A custom dimension (or tags) on the
   10.255.0.0/24 VTEP addresses turns them into leaf names, and one on
   10.10.0.0/16 vs 10.20.0.0/16 turns inner IPs into PAYMENTS vs ANALYTICS.
@@ -107,6 +108,42 @@ minutes. If not, see Troubleshooting at the end.
 | 20040 | L2 | anl-lake, 10.20.4.0/24, VLAN 40 |
 | 50010 | L3 | VRF PAYMENTS |
 | 50020 | L3 | VRF ANALYTICS |
+
+### 1.6 SNMP and the LLDP topology map (optional)
+
+Kentik builds its topology view from LLDP neighbor tables it polls over SNMP.
+The lab can serve those, so the six switches draw as a two-tier leaf-spine,
+with servers and the firewall hanging off the leaves.
+
+1. Start the lab with SNMP. UDP 161 needs root:
+   ```bash
+   sudo python3 -m vxlanlab run --collector 127.0.0.1 --port 9995 --snmp
+   ```
+   The systemd unit in `contrib/` already passes `--snmp`.
+2. Check it answers, from the droplet:
+   ```bash
+   sudo apt-get install -y snmp
+   snmpget  -v2c -c public 192.168.250.1 1.3.6.1.2.1.1.5.0         # sysName = spine-01
+   snmpwalk -v2c -c public 192.168.250.1 1.0.8802.1.1.2.1.4.1.1.9  # its 4 LLDP neighbors
+   python3 -m vxlanlab snmp --show                                 # the whole neighbor table
+   ```
+3. Make sure your Universal Agent has its SNMP capability on. **(verify)** the
+   capability name in your UA's settings.
+4. On each of the six devices in Kentik, turn on SNMP polling: v2c, community
+   `public`, polling IP = the sending IP (192.168.250.x). The UA polls from the
+   same droplet, so it reaches the loopback aliases directly.
+5. Give the first poll a few minutes. Interfaces should change from bare
+   ifIndexes to `Ethernet49`, `Ethernet50`, and so on, with descriptions like
+   "uplink to spine-01" and 100G speeds.
+6. Open the topology view and pick the six devices. Each leaf links to both
+   spines on Ethernet49/50, and the leaves list their servers as neighbors.
+   **(verify)** where unmanaged neighbors (servers, `fw-edge`) show up, and
+   whether the view needs the devices in a site or label first.
+
+Matching works because every name lines up. A switch's `sysName` is its
+Kentik device name, and the neighbor each peer reports (`lldpRemSysName`,
+`lldpRemPortId`) is that same name and port name. If you rename a device in
+Kentik, keep it the same as `sysName`, or change both.
 
 ---
 
@@ -257,3 +294,6 @@ subnets) to names with custom dimensions. See 1.5.
 | Spines show only 10.255.0.x on 4789 | Decode isn't on for that device, or it's in VXLAN mode and you're grouping by the standard IP dimensions |
 | Running from a Mac to a remote UA and all traffic shows as one IP | Expected behind NAT. Use the relay (docs/digitalocean.md) |
 | Volume looks 3× too high | You're summing across leaves and spines. Pick one tier |
+| `Could not start SNMP on UDP 161` | Needs root (`sudo`), and the aliases. `Address already in use` means something else holds 161 on all addresses, usually `snmpd`: `sudo ss -ulnp \| grep :161`, then stop it or set its `agentAddress` to `udp:127.0.0.1:161` |
+| `snmpget` times out | Lab not started with `--snmp`, or wrong community. A wrong community gets no answer at all, as on a real switch |
+| Interfaces named but no topology links | SNMP polling isn't on for every switch. A link needs at least one end polled, and both ends named as in Kentik |

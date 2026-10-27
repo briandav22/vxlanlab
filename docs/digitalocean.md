@@ -39,15 +39,17 @@ the droplet's loopback and never cross a network, so nothing can rewrite them.
 5. Run it inside tmux so you can type injects during a demo and detach after:
    ```bash
    tmux new -s lab
-   python3 -m vxlanlab run --collector 127.0.0.1 --port 9995
+   sudo python3 -m vxlanlab run --collector 127.0.0.1 --port 9995 --snmp
+   # --snmp answers SNMP (interfaces, LLDP) on UDP 161, which needs sudo.
+   # Leave it off and drop the sudo if you only want flow.
    # type: elephant   (Enter)   ... type: elephant again to stop
    # Ctrl-b d to detach, tmux attach -t lab to come back
    ```
 
 ### Keep it running as a service
 
-`contrib/vxlanlab.service` runs the baseline traffic forever (no injects; use
-a tmux session for those). Edit `WorkingDirectory` if you cloned somewhere
+`contrib/vxlanlab.service` runs the baseline traffic forever, with SNMP on
+(no injects; use a tmux session for those). Edit `WorkingDirectory` if you cloned somewhere
 other than `/opt/vxlanlab`, then:
 
 ```bash
@@ -90,6 +92,10 @@ python3 -m vxlanlab run --source-mode single --collector <droplet-ip> --port 634
 ```
 
 The relay prints each switch as it first hears from it.
+
+For SNMP in this layout, run the agents on the droplet next to the relay:
+`sudo python3 -m vxlanlab snmp`. Names, speeds and LLDP neighbors are all
+there; interface counters stay at 0 because the traffic is made on the Mac.
 
 ## Option C: all on the Mac
 

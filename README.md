@@ -1,7 +1,9 @@
 # vxlanlab
 
 A simulated VXLAN EVPN leaf-spine fabric that sends real sFlow v5 to a Kentik
-Universal Agent. Six fake switches each export from their own IP, and the
+Universal Agent. Six fake switches each export from their own IP, and can
+answer SNMP there too (interfaces plus LLDP neighbors, so Kentik can draw the
+fabric as a topology map). The
 samples carry real packet headers: inner-only on server ports, and outer VTEP
 headers + VXLAN + inner packet on the fabric links. That's exactly what a real
 fabric sends, so Kentik's VXLAN decode has something to decode.
@@ -27,7 +29,7 @@ The names and addresses match the fabric walkthrough in
 
 | Path | What it is |
 |---|---|
-| `vxlanlab/` | The lab: fabric model, packet builder, sFlow encoder, traffic engine, CLI |
+| `vxlanlab/` | The lab: fabric model, packet builder, sFlow encoder, SNMP agent, traffic engine, CLI |
 | `vxlanlab/topology.json` | Devices, VRFs, VNIs, hosts, flows and demo injects. Edit to taste |
 | `docs/kentik-runbook.md` | Kentik setup plus the demo runbook, use case by use case |
 | `docs/digitalocean.md` | Spinning it up on a droplet next to the Universal Agent, or from your Mac |
@@ -46,8 +48,9 @@ sudo python3 -m vxlanlab aliases --apply
 # 2. See what to add in Kentik: one sFlow device per switch, with its sending IP
 python3 -m vxlanlab devices
 
-# 3. Start the fabric. The Universal Agent receives flow on UDP 9995
-python3 -m vxlanlab run --collector 127.0.0.1 --port 9995
+# 3. Start the fabric. The Universal Agent receives flow on UDP 9995.
+#    --snmp also answers SNMP on UDP 161 at each switch IP (161 needs sudo)
+sudo python3 -m vxlanlab run --collector 127.0.0.1 --port 9995 --snmp
 ```
 
 While it runs, type an inject name and press Enter to turn a demo scenario on
@@ -62,7 +65,8 @@ NAT, so run the relay on the droplet and point the Mac at it. See
 
 | Command | What it does |
 |---|---|
-| `run` | Start the fabric. `--collector`, `--port`, `--sample-rate`, `--scale`, `--inject`, `--duration`, `--source-mode bind|single` |
+| `run` | Start the fabric. `--collector`, `--port`, `--sample-rate`, `--scale`, `--inject`, `--duration`, `--source-mode bind|single`, `--snmp` (`--snmp-port`, `--community`) |
+| `snmp` | SNMP only, no traffic (counters stay at 0). `--show` prints the LLDP neighbor table every switch reports |
 | `devices` | Table (or `--csv`) of the six exporters to add in Kentik |
 | `paths` | How every flow crosses the fabric: L2 VNI, L3 VNI, local or dropped, which spine ECMP picks, the outer VTEP header |
 | `aliases` | Print, `--apply` or `--remove` the loopback aliases for the exporter IPs (Linux `ip`, macOS `ifconfig`) |
@@ -133,11 +137,41 @@ Validated with the lab's own decoder, [goflow2](https://github.com/netsampler/go
 (parses every datagram, and reports only the outer header, like any
 VXLAN-unaware collector), and scapy (full Ether/IP/UDP/VXLAN/Ether/IP/TCP stack).
 
+## SNMP and LLDP
+
+With `run --snmp`, each switch answers SNMP v1/v2c (read-only, community
+`public` by default) on UDP 161 at its own mgmt IP, the same IP its sFlow
+comes from. It serves:
+
+| MIB | What's in it |
+|---|---|
+| SNMPv2-MIB system | `sysName` = the device name (`leaf-01`), Arista-style `sysDescr` and `sysObjectID`, uptime matching the sFlow agent |
+| IF-MIB `ifTable` / `ifXTable` | Every port the lab uses, at the ifIndex the sFlow carries (Ethernet49 = 49), with `ifName`, `ifAlias` ("uplink to spine-01", "web-01 (VLAN 10)"), speed, and live in/out octet and packet counters from the traffic engine. Plus Management1 (ifIndex 999001) |
+| IP-MIB `ipAddrTable` | The mgmt IP, on Management1 |
+| LLDP-MIB | Local chassis and ports, and `lldpRemTable` / `lldpRemManAddrTable`: one neighbor per port |
+
+The LLDP neighbors are the fabric itself: each spine sees the four leaves on
+Ethernet1-4, each leaf sees spine-01 on Ethernet49 and spine-02 on
+Ethernet50, from both ends with matching port names. Leaves also see their
+servers (`web-01` on `eth0`), and border-leaf sees `fw-edge`. Check it with:
+
+```bash
+python3 -m vxlanlab snmp --show
+snmpwalk -v2c -c public 192.168.250.11 1.0.8802.1.1.2.1.4.1.1.9   # leaf-01's neighbors
+```
+
+Change the community, `sysDescr`, `sysObjectID` or location with an `snmp`
+block in `topology.json`, e.g. `"snmp": {"community": "lab-ro"}`. Setting it
+up in Kentik is in [docs/kentik-runbook.md](docs/kentik-runbook.md), section 1.6.
+
 ## Limits
 
 - Only the fabric switches are simulated, all sFlow. The firewall, internet
   router and SD-WAN boxes in the walkthrough export IPFIX in real life and
   aren't sent here.
-- No SNMP, so Kentik shows interfaces by ifIndex (Ethernet49 = 49) unless you
-  name them. `python3 -m vxlanlab devices` lists the mapping.
+- SNMP is v1/v2c and read-only, with no traps. Servers and fw-edge appear as
+  LLDP neighbors but don't answer SNMP themselves.
+- Interface counters only move with `run --snmp`. In Option B (lab on a Mac,
+  relay on the droplet), run `sudo python3 -m vxlanlab snmp` on the droplet:
+  names and LLDP are all there, but counters stay at 0.
 - Volumes, addresses and MACs are made up. Documentation and RFC 1918 ranges only.
