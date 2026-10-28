@@ -429,7 +429,7 @@ def cmd_kentik_dimensions(args) -> int:
         print("Missing " + ", ".join(missing) + ". Use --dry-run to only print the plan.", file=sys.stderr)
         return 2
 
-    client = dimensions.Client(args.email, args.token, args.api_url)
+    client = dimensions.Client(args.email, args.token, args.api_url, delay=args.delay, retries=args.retries)
     failures = []
     try:
         have = client.dimensions()
@@ -764,6 +764,10 @@ def main(argv=None) -> int:
                     help="v5 API base URL (env KENTIK_V5_API_URL; EU: https://api.kentik.eu/api/v5)")
     kd.add_argument("--csv", default=dimensions.SUBNETS_CSV,
                     help="subnets CSV with subnet,segment,tenant_vrf,role,zone columns (default: the lab's)")
+    kd.add_argument("--delay", type=float, default=1.0,
+                    help="seconds between API calls, to stay under Kentik's rate limit (default 1)")
+    kd.add_argument("--retries", type=int, default=6,
+                    help="times to retry a call that gets HTTP 429, with backoff (default 6)")
     kd.add_argument("--prune", action="store_true",
                     help="delete populators on these dimensions whose subnet isn't in the CSV")
     kd.add_argument("--dry-run", action="store_true", help="print the dimensions and populators, don't call the API")
