@@ -179,6 +179,16 @@ minutes. If not, see Troubleshooting at the end.
   10.10.0.0/16 vs 10.20.0.0/16 turns inner IPs into PAYMENTS vs ANALYTICS.
   Whether a populator can match on the VNI field itself is **(verify)**. If
   it can, map 50010 → PAYMENTS, 50020 → ANALYTICS, 10010 → pay-web, and so on.
+- **Subnet dimensions from the API.** `python3 -m vxlanlab kentik dimensions`
+  makes sure Kentik has `c_src_`/`c_dst_` custom dimensions for segment,
+  tenant, role and zone, and gives each one populator per subnet in
+  `vxlanlab/subnets.csv` (direction src for `c_src_*`, dst for `c_dst_*`). It
+  reuses dimensions that already exist, adds missing populators and fixes
+  wrong values, so it is safe to rerun after editing the CSV. It uses the
+  same `KENTIK_EMAIL` / `KENTIK_API_TOKEN` as `onboard`, and the US v5 API
+  (`--api-url https://api.kentik.eu/api/v5` for EU). `--dry-run` prints the
+  plan; `--prune` also deletes populators whose subnet left the CSV.
+  Populators only tag flows that arrive after they exist.
 
 | VNI | Kind | Meaning |
 |---|---|---|

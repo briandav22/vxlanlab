@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Dict, List
 
-from . import __version__, kentik, sflow
+from . import __version__, dimensions, kentik, sflow
 from .snmp import SnmpServer
 from .engine import Engine, Exporter
 from .fabric import TOPOLOGIES, Fabric
@@ -410,6 +410,79 @@ def _retry_one_by_one(send, failed: List[Dict], verb: str, failures: Dict[str, s
             failures[name] = str(e)
 
 
+def cmd_kentik_dimensions(args) -> int:
+    try:
+        rows = dimensions.load_subnets(args.csv)
+    except OSError as e:
+        print("Can't read %s: %s" % (args.csv, e), file=sys.stderr)
+        return 2
+    want = dimensions.plan(rows)
+    if args.dry_run:
+        print("# %d subnet(s) from %s" % (len(rows), args.csv))
+        print("# Each dimension is created with POST %s/customdimension only if no dimension has its "
+              "name, then gets POST .../customdimension/<id>/populator per missing populator" % args.api_url)
+        print(json.dumps(want, indent=2))
+        return 0
+    missing = [flag for flag, v in (("--email / KENTIK_EMAIL", args.email),
+                                    ("--token / KENTIK_API_TOKEN", args.token)) if not v]
+    if missing:
+        print("Missing " + ", ".join(missing) + ". Use --dry-run to only print the plan.", file=sys.stderr)
+        return 2
+
+    client = dimensions.Client(args.email, args.token, args.api_url)
+    failures = []
+    try:
+        have = client.dimensions()
+    except kentik.KentikError as e:
+        print("Kentik API error: %s" % e, file=sys.stderr)
+        return 1
+    for dim in want:
+        name = dim["name"]
+        try:
+            cur = have.get(name)
+            if cur is None:
+                cur = client.create_dimension(dim)
+                _show_raw(args, "create " + name, cur)
+                if not cur.get("id"):
+                    raise kentik.KentikError("creating %s returned no id" % name)
+                print("Created dimension %s (%r, id %s)" % (name, dim["display_name"], cur["id"]))
+            add, update, stale = dimensions.diff(dim["populators"], cur.get("populators") or [])
+            print("%s: %d populator(s) to add, %d to update, %d already right"
+                  % (name, len(add), len(update), len(dim["populators"]) - len(add) - len(update)))
+        except kentik.KentikError as e:
+            failures.append("%s: %s" % (name, e))
+            continue
+        dim_id = cur["id"]
+        for pop in add:
+            try:
+                _show_raw(args, "populator", client.create_populator(dim_id, pop))
+                print("  added   %-18s %s" % (pop["addr"], pop["value"]))
+            except kentik.KentikError as e:
+                failures.append("%s %s: %s" % (name, pop["addr"], e))
+        for old, pop in update:
+            try:
+                _show_raw(args, "populator", client.update_populator(dim_id, old["id"], pop))
+                print("  updated %-18s %s -> %s" % (pop["addr"], old.get("value"), pop["value"]))
+            except kentik.KentikError as e:
+                failures.append("%s %s: %s" % (name, pop["addr"], e))
+        for old in stale:
+            if not args.prune:
+                print("  not in CSV, left alone: %s %s = %s (--prune deletes it)"
+                      % (old.get("direction"), old.get("addr"), old.get("value")))
+                continue
+            try:
+                client.delete_populator(dim_id, old["id"])
+                print("  deleted %-18s %s" % (old.get("addr"), old.get("value")))
+            except kentik.KentikError as e:
+                failures.append("%s delete %s: %s" % (name, old.get("addr"), e))
+    if failures:
+        print("%d change(s) failed:" % len(failures), file=sys.stderr)
+        for f in failures:
+            print("  " + f, file=sys.stderr)
+        return 1
+    return 0
+
+
 # ------------------------------------------------------------------ paths
 
 def cmd_paths(args) -> int:
@@ -646,7 +719,7 @@ def main(argv=None) -> int:
     d.add_argument("--sample-rate", type=int)
     d.set_defaults(func=cmd_devices)
 
-    k = sub.add_parser("kentik", help="onboard the lab's switches into Kentik via the API")
+    k = sub.add_parser("kentik", help="onboard the lab's switches and subnet dimensions into Kentik via the API")
     ksub = k.add_subparsers(dest="kentik_cmd", metavar="<action>")
     ko = ksub.add_parser("onboard", help="create (or update) one Kentik device per switch",
                          description="Create one Kentik device per fabric switch, or update it if a "
@@ -680,6 +753,22 @@ def main(argv=None) -> int:
     ko.add_argument("--dry-run", action="store_true", help="print the payload, don't call the API")
     ko.add_argument("--verbose", "-v", action="store_true", help="print every API response")
     ko.set_defaults(func=cmd_kentik_onboard)
+    kd = ksub.add_parser("dimensions", help="create segment/tenant/role/zone custom dimensions from subnets.csv",
+                         description="Make sure c_src_ and c_dst_ custom dimensions exist for segment, tenant, "
+                         "role and zone, and that each has one populator per subnet in the CSV (src for "
+                         "c_src_*, dst for c_dst_*). Existing dimensions are reused; safe to run again.")
+    kd.add_argument("--email", default=os.environ.get("KENTIK_EMAIL"), help="API user email (env KENTIK_EMAIL)")
+    kd.add_argument("--token", default=os.environ.get("KENTIK_API_TOKEN"),
+                    help="API token (env KENTIK_API_TOKEN; prefer the env var so it stays out of shell history)")
+    kd.add_argument("--api-url", default=os.environ.get("KENTIK_V5_API_URL", dimensions.API_URL),
+                    help="v5 API base URL (env KENTIK_V5_API_URL; EU: https://api.kentik.eu/api/v5)")
+    kd.add_argument("--csv", default=dimensions.SUBNETS_CSV,
+                    help="subnets CSV with subnet,segment,tenant_vrf,role,zone columns (default: the lab's)")
+    kd.add_argument("--prune", action="store_true",
+                    help="delete populators on these dimensions whose subnet isn't in the CSV")
+    kd.add_argument("--dry-run", action="store_true", help="print the dimensions and populators, don't call the API")
+    kd.add_argument("--verbose", "-v", action="store_true", help="print every API response")
+    kd.set_defaults(func=cmd_kentik_dimensions)
     k.set_defaults(func=lambda a: (k.print_help(), 1)[1])
 
     pth = sub.add_parser("paths", help="show how each flow crosses the fabric (VNI, spine, VTEPs)")
