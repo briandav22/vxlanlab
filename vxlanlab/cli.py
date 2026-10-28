@@ -286,7 +286,9 @@ def cmd_kentik_onboard(args) -> int:
     if not args.agent_id:
         print("note: no --agent-id, so no NMS/SNMP polling config is sent", file=sys.stderr)
     elif not args.credential:
-        print("note: no --credential, so NMS will ping these devices but not poll SNMP", file=sys.stderr)
+        print("WARNING: no SNMP credential (--credential / KENTIK_SNMP_CREDENTIAL), so these devices get "
+              "ICMP only, no SNMP.\nCreate an SNMP v2c credential (community public) in Kentik's credential "
+              "vault and pass its name.", file=sys.stderr)
 
     if args.dry_run:
         print("# POST %s%s/batch_create" % (args.api_url, kentik.DEVICE_PATH))
@@ -601,8 +603,10 @@ def main(argv=None) -> int:
     ko.add_argument("--site-id", type=int, default=_env_int("KENTIK_SITE_ID"), help="site ID (env KENTIK_SITE_ID)")
     ko.add_argument("--agent-id", default=os.environ.get("KENTIK_AGENT_ID"),
                     help="Universal Agent ID that polls the devices (env KENTIK_AGENT_ID)")
-    ko.add_argument("--credential", default=os.environ.get("KENTIK_SNMP_CREDENTIAL"),
-                    help="SNMP credential name in the Kentik credential vault (env KENTIK_SNMP_CREDENTIAL)")
+    ko.add_argument("--credential",
+                    default=os.environ.get("KENTIK_SNMP_CREDENTIAL") or os.environ.get("KENTIK_CREDENTIAL_NAME"),
+                    help="name of an SNMP credential in Kentik's credential vault, not the community "
+                    "string (env KENTIK_SNMP_CREDENTIAL or KENTIK_CREDENTIAL_NAME)")
     ko.add_argument("--template-id", type=int, default=_env_int("KENTIK_MONITORING_TEMPLATE"),
                     help="monitoring template ID (env KENTIK_MONITORING_TEMPLATE)")
     ko.add_argument("--sample-rate", type=int, help="override sample rate (default from topology)")

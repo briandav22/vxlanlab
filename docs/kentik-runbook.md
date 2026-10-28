@@ -60,7 +60,7 @@ token in an env var so it stays out of shell history and out of the repo.
 | `KENTIK_PLAN_ID` | `--plan-id` | Plan the devices go on. Required |
 | `KENTIK_SITE_ID` | `--site-id` | Site. Optional |
 | `KENTIK_AGENT_ID` | `--agent-id` | Universal Agent that polls them. Without it, no NMS config is sent |
-| `KENTIK_SNMP_CREDENTIAL` | `--credential` | SNMP credential name in the credential vault (v2c, `public`). Without it, NMS only pings |
+| `KENTIK_SNMP_CREDENTIAL` (or `KENTIK_CREDENTIAL_NAME`) | `--credential` | The **name** of an SNMP credential in Kentik's credential vault (Settings, Credentials). Create one first: SNMP v2c, community `public`. Without it, devices are ICMP only |
 | `KENTIK_MONITORING_TEMPLATE` | `--template-id` | Monitoring template. Optional |
 | `KENTIK_API_URL` | `--api-url` | Default `https://grpc.api.kentik.com`. EU: `https://grpc.api.kentik.eu` |
 
