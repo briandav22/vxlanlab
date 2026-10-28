@@ -170,6 +170,29 @@ class OnboardCommandTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("5 of 6", err)
 
+    def test_credential_name_env_alias(self):
+        env = {k: os.environ.pop(k) for k in ("KENTIK_SNMP_CREDENTIAL",) if k in os.environ}
+        os.environ["KENTIK_CREDENTIAL_NAME"] = "lab-snmp"
+        try:
+            rc, out, err = self.run_cli("--dry-run", "--agent-id", "6017", "--device", "leaf-03")
+        finally:
+            del os.environ["KENTIK_CREDENTIAL_NAME"]
+            os.environ.update(env)
+        self.assertEqual(rc, 0)
+        dev = json.loads(out[out.index("{"):])["devices"][0]
+        self.assertEqual(dev["nms"]["snmp"], {"credentialName": "lab-snmp", "port": 161})
+        self.assertNotIn("WARNING", err)
+
+    def test_no_credential_warns(self):
+        env = {k: os.environ.pop(k) for k in ("KENTIK_SNMP_CREDENTIAL", "KENTIK_CREDENTIAL_NAME")
+               if k in os.environ}
+        try:
+            _, out, err = self.run_cli("--dry-run", "--agent-id", "6017")
+        finally:
+            os.environ.update(env)
+        self.assertIn("ICMP only", err)
+        self.assertNotIn('"snmp"', out)
+
     def test_dry_run_makes_no_calls(self):
         rc, out, _ = self.run_cli("--api-url", self.url, "--dry-run")
         self.assertEqual(rc, 0)
