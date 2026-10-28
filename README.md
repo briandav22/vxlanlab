@@ -25,15 +25,50 @@ Pure Python 3.8+, standard library only. Runs on macOS or Linux.
 The names and addresses match the fabric walkthrough in
 [`course/vxlan-fabric-walkthrough.html`](course/vxlan-fabric-walkthrough.html).
 
+## Two topologies
+
+| `--topology` | Shape | Devices | Kentik site layers |
+|---|---|---|---|
+| `3tier` (default) | Leaf-spine, above | 6, at 192.168.250.x | Border, Spine, Leaf |
+| `5stage` | Kentik demo DFW1 shape: edge, superspine, two spine/leaf pods, top-of-rack | 22, at 192.168.251.x | Edge, Superspine, Spine, Leaf, Top of Rack |
+
+```
+          edge_a_dfw1  edge_b_dfw1                 (border VTEPs, internet + branch enter here)
+              superspine_a  superspine_b
+   pod 1: spine_a spine_b               pod 2: spine_c spine_d
+          leaf_a leaf_b leaf_c                 leaf_d leaf_e leaf_f
+          tor_a  tor_b  tor_c  tor_d           tor_e  tor_f  tor_g  tor_h   (VTEPs)
+          web-01 web-02 db-01  etl-01          web-03 db-02  backup-01 etl-02
+                 lake-01                                     lake-02
+```
+
+Pick it with `--topology 5stage` (or `-t 5stage`) before the command, or
+`export VXLANLAB_TOPOLOGY=5stage` once (`sudo -E` keeps it). Every command
+works on either: `aliases`, `run`, `snmp`, `devices`, `paths`, `kentik onboard`.
+Same VRFs, VNIs, servers, flows and injects; the difference is the path. Same
+pod turns at a leaf; across pods, a packet crosses leaf, spine, superspine,
+spine, leaf, and each of those ECMP choices comes from the inner 5-tuple hash.
+`paths` shows the switches each flow goes through. The interactive map is
+[`course/vxlan-5stage-fabric.html`](course/vxlan-5stage-fabric.html).
+
+Both labs use different names and IPs, so both can be onboarded into one
+Kentik account and run at once. Give each its own site:
+
+```bash
+python3 -m vxlanlab -t 5stage kentik onboard --site-name "VXLAN Lab DFW1"
+```
+
 ## What's in here
 
 | Path | What it is |
 |---|---|
 | `vxlanlab/` | The lab: fabric model, packet builder, sFlow encoder, SNMP agent, traffic engine, CLI |
 | `vxlanlab/topology.json` | Devices, VRFs, VNIs, hosts, flows and demo injects. Edit to taste |
+| `vxlanlab/topology-5stage.json` | The same lab as a 22-switch 5-stage fabric (`--topology 5stage`) |
 | `docs/kentik-runbook.md` | Kentik setup plus the demo runbook, use case by use case |
 | `docs/digitalocean.md` | Spinning it up on a droplet next to the Universal Agent, or from your Mac |
 | `docs/vxlan-deep-dive.md` | Course section: VXLAN, why visibility disappears, how Kentik restores it |
+| `course/vxlan-5stage-fabric.html` | Interactive map of the 5-stage fabric: follow a flow hop by hop, inspect each switch's LLDP neighbors and Kentik layer |
 | `course/vxlan-deep-dive.html` | The same section as an interactive page, with the walkthrough merged in |
 | `tests/` | `python3 -m unittest discover -s tests` |
 
@@ -67,9 +102,9 @@ NAT, so run the relay on the droplet and point the Mac at it. See
 |---|---|
 | `run` | Start the fabric. `--collector`, `--port`, `--sample-rate`, `--scale`, `--inject`, `--duration`, `--source-mode bind|single`, `--snmp` (`--snmp-port`, `--community`) |
 | `snmp` | SNMP only, no traffic (counters stay at 0). `--show` prints the LLDP neighbor table every switch reports |
-| `devices` | Table (or `--csv`) of the six exporters to add in Kentik |
-| `kentik onboard` | Create the six devices in Kentik through the API (or update them if they exist). `--dry-run` prints the payload. See the runbook, section 1.2 |
-| `paths` | How every flow crosses the fabric: L2 VNI, L3 VNI, local or dropped, which spine ECMP picks, the outer VTEP header |
+| `devices` | Table (or `--csv`) of the exporters to add in Kentik |
+| `kentik onboard` | Create the devices (6, or 22 with `5stage`) in Kentik through the API (or update them if they exist). `--dry-run` prints the payload. See the runbook, section 1.2 |
+| `paths` | How every flow crosses the fabric: L2 VNI, L3 VNI, local or dropped, the outer VTEP header, and the switches ECMP picks |
 | `aliases` | Print, `--apply` or `--remove` the loopback aliases for the exporter IPs (Linux `ip`, macOS `ifconfig`) |
 | `relay` | Receive sFlow from anywhere and resend each datagram from its agent IP. Run it on the UA host |
 | `decode` | A tiny local collector. Prints top talkers by outer header (what a VXLAN-unaware tool sees) next to top talkers after decode, plus bytes per VNI |

@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/vxlanlab
+# For the 22-switch 5-stage fabric, uncomment:
+# Environment=VXLANLAB_TOPOLOGY=5stage
 ExecStartPre=/usr/bin/python3 -m vxlanlab aliases --apply
 ExecStart=/usr/bin/python3 -m vxlanlab run --collector 127.0.0.1 --port 9995 --snmp --no-console --report 60
 Restart=on-failure
