@@ -252,8 +252,13 @@ def cmd_devices(args) -> int:
 # ------------------------------------------------------------------ kentik
 
 def _env_int(name: str):
-    v = os.environ.get(name)
-    return int(v) if v else None
+    v = os.environ.get(name, "").strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        sys.exit("%s=%r isn't a number" % (name, v))
 
 
 def cmd_kentik_onboard(args) -> int:
@@ -275,6 +280,8 @@ def cmd_kentik_onboard(args) -> int:
         if missing:
             print("Missing " + ", ".join(missing) + ". Use --dry-run to only print the payload.",
                   file=sys.stderr)
+            print("Env vars must be exported in this shell (export KENTIK_PLAN_ID=1234, not just "
+                  "KENTIK_PLAN_ID=1234), and sudo drops them unless you use sudo -E.", file=sys.stderr)
             return 2
     if not args.agent_id:
         print("note: no --agent-id, so no NMS/SNMP polling config is sent", file=sys.stderr)
@@ -288,21 +295,62 @@ def cmd_kentik_onboard(args) -> int:
         return 0
 
     client = kentik.Client(args.email, args.token, args.api_url)
+    failures = {}   # device name -> why
     try:
         create, update = kentik.split_existing(devices, client.existing_ids())
         if create:
             print("Creating %d device(s): %s" % (len(create), ", ".join(d["deviceName"] for d in create)))
             resp = client.batch_create(create)
+            _show_raw(args, "batch_create", resp)
             for d in resp.get("devices", []):
                 print("  created %-12s id %s" % (d.get("deviceName"), d.get("id")))
+            _retry_one_by_one(client.create, kentik.batch_failures(resp, create, "deviceName"),
+                              "created", failures, args)
         if update:
             print("Updating %d existing device(s): %s" % (len(update), ", ".join(d["deviceName"] for d in update)))
-            client.batch_update(update)
+            resp = client.batch_update(update)
+            _show_raw(args, "batch_update", resp)
+            for d in resp.get("devices", []):
+                print("  updated %-12s id %s" % (d.get("deviceName"), d.get("id")))
+            _retry_one_by_one(client.update, kentik.batch_failures(resp, update, "id"),
+                              "updated", failures, args)
+
+        # Trust the device list, not the batch answer.
+        have = client.existing_ids()
     except kentik.KentikError as e:
         print("Kentik API error: %s" % e, file=sys.stderr)
         return 1
-    print("Done. Flow from 192.168.250.x will land on these devices once the lab is running.")
+    missing = [d["deviceName"] for d in devices if d["deviceName"] not in have]
+    for name in missing:
+        failures.setdefault(name, "Kentik reported no error, but the device isn't in the account's device list")
+    if failures:
+        print("\n%d of %d device(s) are NOT in Kentik:" % (len(failures), len(devices)), file=sys.stderr)
+        for name, why in failures.items():
+            print("  %-12s %s" % (name, why), file=sys.stderr)
+        if any("-" in n for n in failures) and not args.underscores:
+            print("If the reason is the device name, re-run with --underscores (leaf_01 instead of leaf-01).",
+                  file=sys.stderr)
+        return 1
+    print("Verified: all %d device(s) are in Kentik. Flow from 192.168.250.x will land on them "
+          "once the lab is running." % len(devices))
     return 0
+
+
+def _show_raw(args, call: str, resp) -> None:
+    if args.verbose:
+        print("%s response:\n%s" % (call, json.dumps(resp, indent=2)))
+
+
+def _retry_one_by_one(send, failed: List[Dict], verb: str, failures: Dict[str, str], args) -> None:
+    """Batch calls only say which devices failed. Retry each alone to get Kentik's reason."""
+    for dev in failed:
+        name = dev["deviceName"]
+        try:
+            resp = send(dev)
+            _show_raw(args, "retry of " + name, resp)
+            print("  %s %-12s id %s (on retry)" % (verb, name, resp.get("device", {}).get("id")))
+        except kentik.KentikError as e:
+            failures[name] = str(e)
 
 
 # ------------------------------------------------------------------ paths
@@ -563,6 +611,7 @@ def main(argv=None) -> int:
     ko.add_argument("--underscores", action="store_true",
                     help="name devices leaf_01 instead of leaf-01, if your account rejects hyphens")
     ko.add_argument("--dry-run", action="store_true", help="print the payload, don't call the API")
+    ko.add_argument("--verbose", "-v", action="store_true", help="print every API response")
     ko.set_defaults(func=cmd_kentik_onboard)
     k.set_defaults(func=lambda a: (k.print_help(), 1)[1])
 

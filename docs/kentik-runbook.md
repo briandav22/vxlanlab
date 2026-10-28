@@ -75,6 +75,11 @@ python3 -m vxlanlab kentik onboard             # create (or update) the six devi
 python3 -m vxlanlab kentik onboard --device leaf-01,leaf-02   # just some
 ```
 
+Afterwards it lists the account's devices and checks all six are there. Kentik's
+batch calls answer 200 even when some devices fail, so for any device that
+didn't land, it retries that one alone to get Kentik's reason, prints it, and
+exits 1. `--verbose` prints every raw API response.
+
 Device names match each switch's `sysName` (`leaf-01`), which the LLDP
 topology needs (section 1.6). **(verify)** the API docs list device names as
 letters, digits and underscores. If your account rejects the hyphens, add
