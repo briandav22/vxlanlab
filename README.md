@@ -69,6 +69,7 @@ python3 -m vxlanlab -t 5stage kentik onboard --site-name "VXLAN Lab DFW1"
 | `docs/digitalocean.md` | Spinning it up on a droplet next to the Universal Agent, or from your Mac |
 | `docs/vxlan-deep-dive.md` | Course section: VXLAN, why visibility disappears, how Kentik restores it |
 | `course/vxlan-5stage-fabric.html` | Interactive map of the 5-stage fabric: follow a flow hop by hop, inspect each switch's LLDP neighbors and Kentik layer |
+| `course/vxlan-lab-guide.html` | Demo guide for the whole lab: why VXLAN decode matters, running it, scenarios with talk tracks, filters, Kentik AI Advisor prompts and the custom dimensions |
 | `course/vxlan-deep-dive.html` | The same section as an interactive page, with the walkthrough merged in |
 | `tests/` | `python3 -m unittest discover -s tests` |
 

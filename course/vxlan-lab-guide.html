@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important} body{margin:0} img{max-width:100%}</style>
+<title>VXLAN Lab Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: same palette and faces as the other course pages. A reading column with a sticky contents rail on wide screens; packet anatomy and the fabric map are the two pictures, everything else is tables and copyable prompt cards. */
+:root{
+  --paper:#edf1f3; --panel:#fbfcfd; --sunk:#e3e9ed; --ink:#122029; --ink-2:#51616e; --rule:#cad4db; --grid:#dbe3e8;
+  --under:#44607e; --vni:#7343be; --inner:#087e62; --flow:#c75a0b; --pay:#1f6fd6; --anl:#bc376a; --drop:#c22c27;
+  --fd:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --fb:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --fm:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+    --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+  --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+body{background:var(--paper);color:var(--ink);font:15px/1.6 var(--fb);
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:0 64px}
+a{color:var(--vni)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--vni);outline-offset:2px}
+code,.mono{font-family:var(--fm);font-size:.88em}
+code{background:var(--sunk);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+.shell{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:220px minmax(0,1fr);gap:48px}
+@media (max-width:960px){.shell{grid-template-columns:minmax(0,1fr);gap:0}}
+nav.toc{position:sticky;top:env(safe-area-inset-top, 0px);align-self:start;padding-top:40px;max-height:100vh;overflow:auto}
+@media (max-width:960px){nav.toc{display:none}}
+nav.toc p{font:600 11px/1 var(--fb);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin:0 0 12px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px;counter-reset:s}
+nav.toc a{display:block;padding:5px 10px;border-left:2px solid var(--rule);color:var(--ink-2);text-decoration:none;font-size:13.5px}
+nav.toc a:hover{color:var(--ink);border-color:var(--vni)}
+main{min-width:0;max-width:820px}
+header.hero{padding:44px 0 28px;border-bottom:1px solid var(--rule)}
+.eyebrow{font:600 11.5px/1 var(--fb);letter-spacing:.14em;text-transform:uppercase;color:var(--vni);margin:0 0 14px}
+h1{font:800 clamp(34px,6vw,54px)/1.02 var(--fd);font-stretch:88%;margin:0 0 16px;text-wrap:balance;letter-spacing:-.01em}
+h2{font:750 28px/1.15 var(--fd);font-stretch:92%;margin:0 0 6px;text-wrap:balance}
+h3{font:700 19px/1.25 var(--fd);margin:28px 0 8px;text-wrap:balance}
+h4{font:600 13px/1.3 var(--fb);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:18px 0 6px}
+.lede{font-size:18px;line-height:1.55;color:var(--ink-2);max-width:64ch;margin:0}
+.lede strong{color:var(--ink)}
+section{padding:44px 0 8px;border-bottom:1px solid var(--rule);scroll-margin-top:12px}
+section>p,section>ul,section>ol{max-width:68ch}
+.kicker{color:var(--ink-2);margin:0 0 18px;max-width:64ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:20px;font-size:13px;color:var(--ink-2)}
+.meta span b{color:var(--ink);font-weight:600}
+.tw{overflow-x:auto;margin:14px 0 18px;border:1px solid var(--rule);border-radius:8px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--grid);vertical-align:top}
+th{font:600 11.5px/1.3 var(--fb);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);background:var(--sunk);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td .mono,td code{white-space:nowrap}
+.tag{display:inline-block;font:600 11px/1 var(--fb);letter-spacing:.04em;padding:4px 7px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.t-pay{color:var(--pay)} .t-anl{color:var(--anl)} .t-und{color:var(--under)} .t-vni{color:var(--vni)} .t-in{color:var(--inner)} .t-flow{color:var(--flow)} .t-drop{color:var(--drop)}
+.callout{border:1px solid var(--rule);border-left:3px solid var(--vni);background:var(--panel);border-radius:8px;padding:14px 16px;margin:18px 0;max-width:72ch}
+.callout p{margin:0}
+.callout p+p{margin-top:8px}
+.callout.warn{border-left-color:var(--flow)}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+@media (max-width:640px){.two{grid-template-columns:minmax(0,1fr)}}
+.pane{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;min-width:0}
+.pane h4{margin-top:0}
+.pane p{margin:6px 0 0;font-size:14px}
+.big{font:600 15px/1.45 var(--fm);margin:6px 0 0;overflow-wrap:anywhere}
+
+/* packet anatomy */
+.pktwrap{overflow-x:auto;padding:4px 0 8px}
+.pkt{display:grid;grid-template-columns:repeat(8,minmax(88px,1fr));gap:3px;min-width:720px}
+.pkt>div{padding:9px 10px;border-radius:6px;font:500 12px/1.3 var(--fm);border:1px solid;background:var(--panel)}
+.pkt>div small{display:block;font:600 10px/1.2 var(--fb);letter-spacing:.06em;text-transform:uppercase;opacity:.85;margin-bottom:3px}
+.pkt .u{color:var(--under);border-color:var(--under)}
+.pkt .v{color:var(--vni);border-color:var(--vni)}
+.pkt .i{color:var(--inner);border-color:var(--inner)}
+.pkt .p{color:var(--ink-2);border-color:var(--rule);border-style:dashed}
+.pkt>span{font:600 11px/1.2 var(--fb);letter-spacing:.06em;text-transform:uppercase;border-bottom:2px solid;padding-bottom:5px}
+
+/* fabric map */
+.mapwrap{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:12px;margin:16px 0}
+.mapbar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.mapbar button{font:500 13px/1 var(--fb);padding:8px 11px;border-radius:6px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);cursor:pointer}
+.mapbar button[aria-pressed="true"]{background:var(--vni);border-color:var(--vni);color:var(--panel)}
+.svgbox{overflow-x:auto}
+svg.fab{display:block;width:100%;min-width:640px;height:auto}
+.mapnote{font-size:13.5px;color:var(--ink-2);margin:8px 2px 0;min-height:3em}
+.mapnote b{color:var(--ink)}
+
+/* commands */
+pre{position:relative;background:var(--sunk);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;margin:10px 0 16px;overflow-x:auto;font:13px/1.55 var(--fm);max-width:100%}
+pre .c{color:var(--ink-2)}
+.copy{position:absolute;top:7px;right:7px;font:600 11px/1 var(--fb);padding:6px 8px;border-radius:5px;border:1px solid var(--rule);background:var(--panel);color:var(--ink-2);cursor:pointer}
+.copy:hover{color:var(--ink)}
+ol.steps{padding-left:22px}
+ol.steps li{margin:4px 0 2px}
+
+/* scenarios */
+.scn{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:18px 18px 8px;margin:18px 0}
+.scn header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px}
+.scn h3{margin:0}
+.scn .inj{font:600 13px/1 var(--fm);padding:5px 8px;border-radius:5px;background:var(--sunk);color:var(--flow)}
+.scn dl{display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px 16px;margin:14px 0 10px;font-size:14px}
+@media (max-width:560px){.scn dl{grid-template-columns:minmax(0,1fr);gap:2px}.scn dd{margin-bottom:8px}}
+.scn dt{font:600 12px/1.5 var(--fb);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
+.scn dd{margin:0}
+.track{margin:6px 0 12px;padding-left:22px;font-size:14px}
+.track li{margin:4px 0}
+
+/* prompts */
+.prompts{display:grid;gap:12px;margin:16px 0}
+.pc{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;min-width:0}
+.pc .top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin-bottom:6px}
+.pc .n{font:700 12px/1 var(--fm);color:var(--vni)}
+.pc .ttl{font:700 16px/1.25 var(--fd)}
+.pc .why{font-size:13.5px;color:var(--ink-2);margin:0 0 10px}
+.pc .why b{color:var(--ink);font-weight:600}
+.pc blockquote{position:relative;margin:0;background:var(--sunk);border-radius:6px;padding:11px 74px 11px 13px;font-size:14px;line-height:1.5}
+.pc blockquote .copy{top:8px}
+.pc .needs{margin-left:auto}
+.foot{font-size:12.5px;color:var(--ink-2);margin-top:28px;max-width:72ch}
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#why">Why VXLAN visibility</a></li>
+    <li><a href="#decode">What Tunnel Decode solves</a></li>
+    <li><a href="#lab">The lab fabric</a></li>
+    <li><a href="#run">Run it</a></li>
+    <li><a href="#scenarios">Demo scenarios</a></li>
+    <li><a href="#filters">Filters to try</a></li>
+    <li><a href="#prompts">AI Advisor prompts</a></li>
+    <li><a href="#dimensions">Custom dimensions</a></li>
+    <li><a href="#trouble">Troubleshooting</a></li>
+  </ol>
+</nav>
+<main>
+<header class="hero">
+  <p class="eyebrow">vxlanlab · demo guide</p>
+  <h1>The spines carry everything and know nothing</h1>
+  <p class="lede">This guide covers the whole <code>vxlanlab</code> project: a simulated VXLAN EVPN fabric that sends real sFlow and answers SNMP, so you can show <strong>how Kentik turns tunnel traffic back into servers, apps and tenants</strong>. It focuses on the 22-switch 5-stage fabric, and the smaller 3-tier lab works the same way.</p>
+  <div class="meta">
+    <span><b>Repo</b> briandav22/vxlanlab</span>
+    <span><b>Primary topology</b> 5stage (site "VXLAN Lab DFW1")</span>
+    <span><b>Collector</b> Kentik Universal Agent, UDP 9995</span>
+  </div>
+</header>
+
+<section id="why">
+  <p class="eyebrow">1 · The problem</p>
+  <h2>Why VXLAN hides the conversation</h2>
+  <p class="kicker">A VXLAN fabric carries tenant traffic between switches inside a tunnel. That is great for the network and bad for anyone who wants to know who is talking.</p>
+
+  <div class="two">
+    <div class="pane">
+      <h4 class="t-in">Overlay: the cars</h4>
+      <p>The tenant traffic: real servers and apps, like web-01 <code>10.10.1.21</code> talking to db-01 <code>10.10.2.45</code>. It rides <em>inside</em> the tunnel, and the VNI says which tenant network it belongs to.</p>
+    </div>
+    <div class="pane">
+      <h4 class="t-und">Underlay: the road</h4>
+      <p>The physical fabric: switches and their VTEP addresses, like tor_c <code>10.255.1.43</code> to tor_g <code>10.255.1.47</code>. Its only job is to carry tunnels between switches on UDP 4789.</p>
+    </div>
+  </div>
+
+  <p>When a packet enters the fabric, the ingress switch (the VTEP) wraps it in a new outer header addressed VTEP to VTEP. Every device in the middle forwards on that outer header. So does every flow tool that reads only the first IP header it finds. This is what one sampled packet of the elephant backup looks like on a spine link:</p>
+
+  <div class="pktwrap"><div class="pkt" role="img" aria-label="Packet layers: outer Ethernet, outer IP 10.255.1.43 to 10.255.1.47, UDP to 4789, VXLAN VNI 50010, inner Ethernet, inner IP 10.10.2.45 to 10.10.5.50, TCP to 10566, payload">
+    <span class="t-und" style="grid-column:1/4">Underlay, added by tor_c</span>
+    <span class="t-vni" style="grid-column:4/5">Tunnel</span>
+    <span class="t-in" style="grid-column:5/9">Overlay, the original packet</span>
+    <div class="u"><small>Outer Eth</small>switch MACs</div>
+    <div class="u"><small>Outer IPv4</small>10.255.1.43<br>→ 10.255.1.47</div>
+    <div class="u"><small>Outer UDP</small>49908<br>→ 4789</div>
+    <div class="v"><small>VXLAN</small>VNI 50010</div>
+    <div class="i"><small>Inner Eth</small>router MACs</div>
+    <div class="i"><small>Inner IPv4</small>10.10.2.45<br>→ 10.10.5.50</div>
+    <div class="i"><small>Inner TCP</small>51103<br>→ 10566</div>
+    <div class="p"><small>Payload</small>not sampled</div>
+  </div></div>
+
+  <div class="two">
+    <div class="pane">
+      <h4>A basic collector reports</h4>
+      <p class="big">10.255.1.43 → 10.255.1.47<br>UDP 4789</p>
+      <p>"tor_c is talking to tor_g." Every conversation between those two racks collapses into this one row.</p>
+    </div>
+    <div class="pane">
+      <h4 class="t-vni">Kentik with decode reports</h4>
+      <p class="big">10.10.2.45 → 10.10.5.50<br>TCP 10566 · VNI 50010</p>
+      <p>"db-01 is dumping a backup to backup-01, in the PAYMENTS tenant." That is a team you can call.</p>
+    </div>
+  </div>
+  <p>The lab's own <code>decode</code> command shows the same thing locally: top talkers by outer header next to top talkers after decode.</p>
+</section>
+
+<section id="decode">
+  <p class="eyebrow">2 · The value</p>
+  <h2>What sFlow Tunnel Decode solves for</h2>
+  <p class="kicker">Kentik reads the packet header inside each sFlow sample, steps past the VXLAN header, and records the inner packet. Per the <a href="https://kb.kentik.com/docs/using-vxlan" target="_blank" rel="noopener">Kentik KB, Using VXLAN</a>, you pick the behavior with the device <b>Type</b> in its general settings.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Device type</th><th>Inner IPs and ports land in</th><th>VNI and VTEP land in</th><th>Use it for</th></tr></thead>
+    <tbody>
+      <tr><td><b>sFlow Tunnel Decode</b></td><td>The standard Source / Destination IP and Port dimensions</td><td>VXLAN dimensions</td><td>Day to day. Every dashboard, filter, alert and custom dimension built on Src/Dst IP starts working on spine traffic with no changes.</td></tr>
+      <tr><td><b>VXLAN</b></td><td>VXLAN dimensions (<code>VXLAN VNI 0/1 IP Address</code>, <code>Port</code>, <code>Protocol</code>)</td><td><code>VXLAN VNI 0/1</code>, <code>VXLAN VTEP 0/1 IP Address</code></td><td>Teaching. The standard IP dimensions keep showing the underlay, so you can show before and after in one query (verify this in your portal).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>What it gives the customer</h3>
+  <ul>
+    <li><b>Attribution on the busiest links.</b> Spines and superspines carry the most traffic and, without decode, explain the least. Decode names the servers, ports and tenants on every fabric link.</li>
+    <li><b>Tenant and segment accounting.</b> The VNI tells you which tenant network a flow belongs to (here, L3 VNI 50010 for PAYMENTS and 50020 for ANALYTICS), so you can measure share, chargeback and noisy neighbors.</li>
+    <li><b>Segmentation proof.</b> Inner IPs crossing between tenants on a spine is a hole in your segmentation, visible as it happens.</li>
+    <li><b>One mental model.</b> With Tunnel Decode, the inner IPs flow into the same dimensions as the rest of the network, so enrichment, custom dimensions and AI Advisor all work on fabric traffic too.</li>
+  </ul>
+
+  <h3>Why sFlow, and what it needs</h3>
+  <ul>
+    <li>sFlow ships the raw packet header, so the inner packet is in the sample. A NetFlow or IPFIX cache on a spine is keyed on the outer header and has already thrown the inner one away. Per the KB, VXLAN decode requires sFlow.</li>
+    <li>The sampled header must be long enough. A VXLAN-wrapped TCP packet needs 104 bytes of headers. The lab samples 128 bytes, a common switch default.</li>
+    <li>VXLAN is the only tunnel decoded today, per the KB. GRE, NVGRE and GENEVE are not.</li>
+  </ul>
+  <div class="callout warn"><p><b>What it can't do.</b> No latency or loss, nothing inside encrypted tunnels, no VM-to-VM traffic that never leaves a host, and small flows can be missed by sampling. Kentik also counts a packet once per device that samples it, so pick one tier (for example the spines) for totals.</p></div>
+</section>
+
+<section id="lab">
+  <p class="eyebrow">3 · The lab</p>
+  <h2>The fabric you are demoing</h2>
+  <p class="kicker">Pure Python, standard library only. Each fake switch sends sFlow v5 from its own IP and can answer SNMP (sysName, IF-MIB, LLDP-MIB) at that same IP, so Kentik sees real devices and can draw the topology map.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Topology</th><th>Shape</th><th>Devices</th><th>Sending / SNMP IPs</th><th>VTEPs</th><th>Kentik site layers</th></tr></thead>
+    <tbody>
+      <tr><td><code>5stage</code></td><td>Shaped like Kentik's demo DFW1 site: edge, superspine, two spine/leaf pods, top of rack</td><td>22</td><td class="mono">192.168.251.x</td><td class="mono">10.255.1.0/24</td><td>Edge, Superspine, Spine, Leaf, Top of Rack</td></tr>
+      <tr><td><code>3tier</code> (default)</td><td>Leaf-spine: 2 spines, 3 leaves, a border leaf</td><td>6</td><td class="mono">192.168.250.x</td><td class="mono">10.255.0.0/24</td><td>Border, Spine, Leaf</td></tr>
+    </tbody>
+  </table></div>
+  <p>The two never overlap, so both can be onboarded and run at once. Give each its own site. Same VRFs, VNIs, servers, flows and scenarios. Only the path differs.</p>
+
+  <h3>Follow a flow across the 5-stage fabric</h3>
+  <p>Pick a flow. The highlighted path is what the lab's ECMP hash picks for it (from <code>python3 -m vxlanlab -t 5stage paths</code>). The orange ends are the ToR access ports, where the inner IPs are visible to everyone. Everything in between carries only the VTEP header unless you decode.</p>
+  <div class="mapwrap">
+    <div class="mapbar" role="group" aria-label="Choose a flow">
+      <button type="button" id="p-elephant" data-p="elephant" aria-pressed="true">Elephant backup</button>
+      <button type="button" id="p-web03" data-p="web03">web-03 → db-01</button>
+      <button type="button" id="p-web01" data-p="web01">web-01 → db-01</button>
+      <button type="button" id="p-leak" data-p="leak">Leak</button>
+      <button type="button" id="p-surge" data-p="surge">Surge</button>
+    </div>
+    <div class="svgbox"><svg class="fab" id="fab" viewBox="0 0 980 470" role="img" aria-label="5-stage fabric map with the selected flow highlighted"></svg></div>
+    <p class="mapnote" id="mapnote"></p>
+  </div>
+
+  <h3>Servers and where they plug in</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Host</th><th>IP</th><th>Segment / VLAN</th><th>L2 VNI</th><th>Tenant</th><th>5-stage ToR</th><th>Pod</th></tr></thead>
+    <tbody>
+      <tr><td>web-01</td><td class="mono">10.10.1.21</td><td>pay-web / 10</td><td>10010</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_a_dfw1</td><td>1</td></tr>
+      <tr><td>web-02</td><td class="mono">10.10.1.22</td><td>pay-web / 10</td><td>10010</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_b_dfw1</td><td>1</td></tr>
+      <tr><td>web-03</td><td class="mono">10.10.1.23</td><td>pay-web / 10</td><td>10010</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_e_dfw1</td><td>2</td></tr>
+      <tr><td>db-01</td><td class="mono">10.10.2.45</td><td>pay-db / 20</td><td>10020</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_c_dfw1</td><td>1</td></tr>
+      <tr><td>db-02</td><td class="mono">10.10.2.46</td><td>pay-db / 20</td><td>10020</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_f_dfw1</td><td>2</td></tr>
+      <tr><td>backup-01</td><td class="mono">10.10.5.50</td><td>pay-backup / 25</td><td>10025</td><td><span class="tag t-pay">PAYMENTS</span></td><td>tor_g_dfw1</td><td>2</td></tr>
+      <tr><td>etl-01</td><td class="mono">10.20.3.30</td><td>anl-etl / 30</td><td>20030</td><td><span class="tag t-anl">ANALYTICS</span></td><td>tor_d_dfw1</td><td>1</td></tr>
+      <tr><td>etl-02</td><td class="mono">10.20.3.31</td><td>anl-etl / 30</td><td>20030</td><td><span class="tag t-anl">ANALYTICS</span></td><td>tor_h_dfw1</td><td>2</td></tr>
+      <tr><td>lake-01</td><td class="mono">10.20.4.40</td><td>anl-lake / 40</td><td>20040</td><td><span class="tag t-anl">ANALYTICS</span></td><td>tor_b_dfw1</td><td>1</td></tr>
+      <tr><td>lake-02</td><td class="mono">10.20.4.41</td><td>anl-lake / 40</td><td>20040</td><td><span class="tag t-anl">ANALYTICS</span></td><td>tor_g_dfw1</td><td>2</td></tr>
+    </tbody>
+  </table></div>
+  <p>Traffic bridged inside one segment carries its L2 VNI (10010 to 20040). Traffic routed between segments carries the tenant's L3 VNI: <b>50010</b> for VRF PAYMENTS, <b>50020</b> for VRF ANALYTICS. Internet customers (<code>203.0.113.0/24</code>, <code>192.0.2.0/24</code>) and branch-12 users (<code>10.50.12.0/24</code>) enter at edge_a / edge_b, the border VTEPs <code>10.255.1.1</code> and <code>.2</code>, and ride L3 VNI 50010.</p>
+
+  <h3>Baseline traffic (always on)</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Flow</th><th>From → to</th><th>Port</th><th>VNI</th><th>What it shows</th></tr></thead>
+    <tbody>
+      <tr><td>web-health-check</td><td>web ↔ web</td><td>tcp 8443</td><td>10010</td><td>Bridged east-west in an L2 VNI</td></tr>
+      <tr><td>web-to-db</td><td>web-01/02/03 → db-01</td><td>tcp 5432</td><td>50010</td><td>Routed in VRF PAYMENTS</td></tr>
+      <tr><td>db-replication</td><td>db-01 → db-02</td><td>tcp 5433</td><td>10020</td><td>Bridged across pods, through a superspine</td></tr>
+      <tr><td>internet-https</td><td>300 internet clients → web</td><td>tcp 443</td><td>50010</td><td>North-south, real client IPs inside the tunnel</td></tr>
+      <tr><td>branch-portal</td><td>40 branch-12 users → web-02</td><td>tcp 443</td><td>50010</td><td>Internal users over SD-WAN</td></tr>
+      <tr><td>etl-kafka</td><td>etl-01 → etl-02</td><td>tcp 9092</td><td>20030</td><td>Bridged in the ETL segment</td></tr>
+      <tr><td>etl-to-lake</td><td>etl-01/02 → lake-01/02</td><td>tcp 8020</td><td>50020</td><td>Routed in VRF ANALYTICS</td></tr>
+      <tr><td>cross-vrf-attempt</td><td>web-01 → etl-01</td><td>tcp 9092</td><td>none</td><td>A trickle dropped at tor_a: no route between tenants</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="run">
+  <p class="eyebrow">4 · Run it</p>
+  <h2>Stand it up and turn scenarios on</h2>
+  <p class="kicker">Run the lab on the same Linux host as the Universal Agent (a 2 vCPU / 4 GB droplet is plenty). The fake switch IPs live on loopback, so the agent sees each one as a separate exporter.</p>
+
+  <ol class="steps">
+    <li><b>Get the code</b></li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>git clone https://github.com/briandav22/vxlanlab.git && cd vxlanlab
+<span class="c"># already cloned:</span>
+cd ~/vxlanlab && git checkout main && git pull</pre>
+  <ol class="steps" start="2">
+    <li><b>Put credentials and IDs in an env file.</b> Every line needs <code>export</code> and straight quotes. Plan, agent and credential IDs come from the portal you are onboarding into. <code>KENTIK_SNMP_CREDENTIAL</code> is the <em>name</em> of an SNMP v2c credential (community <code>public</code>) saved in Kentik's credential vault.</li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>cat > ~/.kentik.env &lt;&lt;'EOF'
+export KENTIK_EMAIL="you@example.com"
+export KENTIK_API_TOKEN="YOUR_TOKEN"
+export KENTIK_PLAN_ID="1234"
+export KENTIK_AGENT_ID="5678"
+export KENTIK_SNMP_CREDENTIAL="NAME_OF_SNMP_CREDENTIAL"
+export VXLANLAB_TOPOLOGY=5stage
+EOF
+chmod 600 ~/.kentik.env
+source ~/.kentik.env</pre>
+  <ol class="steps" start="3">
+    <li><b>Add the switch IPs</b> to loopback. Needed again after every reboot. "Address already assigned" errors are harmless.</li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>sudo -E python3 -m vxlanlab aliases --apply</pre>
+  <ol class="steps" start="4">
+    <li><b>Onboard the 22 devices</b> into a new site with all five layers. Safe to re-run: existing devices are updated, not duplicated.</li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>python3 -m vxlanlab kentik onboard --site-name "VXLAN Lab DFW1" --dry-run   <span class="c"># preview</span>
+python3 -m vxlanlab kentik onboard --site-name "VXLAN Lab DFW1" -v</pre>
+  <ol class="steps" start="5">
+    <li><b>Create the custom dimensions</b> from <code>vxlanlab/subnets.csv</code> (see <a href="#dimensions">section 8</a>).</li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>python3 -m vxlanlab kentik dimensions --dry-run
+python3 -m vxlanlab kentik dimensions</pre>
+  <ol class="steps" start="6">
+    <li><b>Turn on decode</b> in the portal: set each device's Type to <b>sFlow Tunnel Decode</b> (or <b>VXLAN</b> on one spine for a teaching contrast). The onboarding script creates them as plain routers.</li>
+    <li><b>Start the fabric.</b> Use tmux so you can type scenario names during the demo and detach afterwards.</li>
+  </ol>
+<pre><button class="copy" type="button">Copy</button>tmux new -s lab
+sudo -E python3 -m vxlanlab run --collector 127.0.0.1 --port 9995 --snmp
+<span class="c"># Ctrl-b d to detach, tmux attach -t lab to come back</span></pre>
+  <p>Give it 15 minutes before a demo so Kentik has a baseline to compare against.</p>
+
+  <h3>Turning scenarios on and off</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Do this</th><th>In the running lab's terminal</th></tr></thead>
+    <tbody>
+      <tr><td>Toggle a scenario</td><td>Type <code>elephant</code>, <code>leak</code>, <code>noisy</code> or <code>surge</code> and press Enter. It prints <code>inject elephant is ON</code>. Type it again to turn it off.</td></tr>
+      <tr><td>See what's on</td><td><code>status</code></td></tr>
+      <tr><td>Turn everything off</td><td><code>clear</code></td></tr>
+      <tr><td>Stop the lab</td><td><code>quit</code></td></tr>
+      <tr><td>Start with some on</td><td><code>sudo -E python3 -m vxlanlab run --snmp --inject elephant,leak</code></td></tr>
+      <tr><td>Running as the systemd service</td><td>The service uses <code>--no-console</code>, so there's no typing. Add <code>--inject …</code> to <code>ExecStart</code> and restart it, or stop the service and run in tmux.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Other useful commands</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>devices</code></td><td>The exporters to add in Kentik, with sending IP, VTEP and what sits on each port</td></tr>
+      <tr><td><code>paths --flow elephant</code></td><td>Inner 5-tuple, VNI, outer VTEP header and the switches ECMP picks for each flow</td></tr>
+      <tr><td><code>snmp --show</code></td><td>The LLDP neighbor table every switch reports (48 links in 5-stage)</td></tr>
+      <tr><td><code>decode --listen 127.0.0.1:9996</code></td><td>A tiny local collector: top talkers by outer header next to top talkers after decode, plus bytes per VNI</td></tr>
+      <tr><td><code>relay</code></td><td>Run on the agent host when generating traffic from a Mac behind NAT (<code>run --source-mode single</code> on the Mac)</td></tr>
+    </tbody>
+  </table></div>
+  <p>Add <code>-t 3tier</code> (or unset <code>VXLANLAB_TOPOLOGY</code>) to any command for the 6-switch lab, and give it its own site, for example <code>--site-name "VXLAN Lab"</code>.</p>
+</section>
+
+<section id="scenarios">
+  <p class="eyebrow">5 · Use cases</p>
+  <h2>Demo scenarios and talk tracks</h2>
+  <p class="kicker">Each scenario is a real problem that looks like nothing, or like the wrong thing, without decode. A strong sequence is <b>surge</b> (outside in), then <b>elephant</b> (east-west), then <b>leak</b> (security), which covers ops, capacity and security on one fabric.</p>
+
+  <article class="scn" id="s-elephant">
+    <header><h3>Hot path from one backup</h3><span class="inj">elephant</span></header>
+    <dl>
+      <dt>What happens</dt><dd>A 2.5 Gbps nightly backup from db-01 <code>10.10.2.45</code> (pod 1) to backup-01 <code>10.10.5.50</code> (pod 2) on one TCP session, port 10566, routed in L3 VNI 50010. One 5-tuple hashes to one path: tor_c › leaf_b › spine_b › superspine_b › spine_d › leaf_f › tor_g.</dd>
+      <dt>Use case</dt><dd>"The app is slow, but utilization looks fine." ECMP can't split one conversation, so one path runs hot while its siblings idle.</dd>
+      <dt>Without decode</dt><dd>One fat tunnel, <code>10.255.1.43 → 10.255.1.47</code> on UDP 4789. Indistinguishable from every other tor_c to tor_g conversation.</dd>
+      <dt>With decode</dt><dd>db-01 → backup-01 on 10566, VNI 50010. Which app, which tenant, which servers.</dd>
+      <dt>Who it lands with</dt><dd>Data center and network ops teams fielding "it's the network" tickets; anyone running backups, storage replication or AI/ML training across a leaf-spine fabric.</dd>
+    </dl>
+    <h4>Talk track</h4>
+    <ol class="track">
+      <li>"The app team says the app is slow. Average utilization says everything's fine."</li>
+      <li>"Look at the links themselves." On the map, one path is hot and its parallel links are quiet. That imbalance is the clue.</li>
+      <li>"Without decoding VXLAN, all you see is tor_c talking to tor_g on 4789." Filter <code>10.255.1.43 → 10.255.1.47</code>.</li>
+      <li>"With Kentik's decode, we see inside the tunnel." Filter <code>10.10.2.45 → 10.10.5.50</code>, port 10566.</li>
+      <li>"Now it's a conversation with the backup team, not the network team: move the window, rate-limit it, or tune hashing."</li>
+    </ol>
+  </article>
+
+  <article class="scn" id="s-leak">
+    <header><h3>Tenant segmentation breach</h3><span class="inj">leak</span></header>
+    <dl>
+      <dt>What happens</dt><dd>Someone leaks routes between VRFs. PAYMENTS web servers (<code>10.10.1.21-23</code>) start reaching ANALYTICS etl-02 <code>10.20.3.31</code> and lake-02 <code>10.20.4.41</code> on tcp 9092, about 25 Mbps per pair, across the fabric in VNI 50020 (replies in 50010).</dd>
+      <dt>Use case</dt><dd>Compliance and segmentation (PCI, tenant isolation). Prove tenants stay apart, and catch the moment they don't.</dd>
+      <dt>Before the leak</dt><dd>Only a trickle of web-01 → etl-01 <code>10.20.3.30</code> on 9092, seen at tor_a with no VNI. That's an attempt the switch dropped.</dd>
+      <dt>The rule to teach</dt><dd>PAYMENTS → ANALYTICS with no VNI is an attempt. PAYMENTS → ANALYTICS with a VNI on a spine is crossing the fabric, and segmentation has a hole.</dd>
+    </dl>
+    <h4>Talk track</h4>
+    <ol class="track">
+      <li>"Your VNIs are supposed to keep these tenants apart. Here's PAYMENTS to ANALYTICS for the last hour: almost nothing, and it never left the first switch."</li>
+      <li>Turn on <code>leak</code>. "Nothing in the underlay changed. Same VTEPs, same UDP 4789. Only the inner headers say two tenants just started talking."</li>
+      <li>"This is the query to save as an alert."</li>
+    </ol>
+  </article>
+
+  <article class="scn" id="s-noisy">
+    <header><h3>Noisy neighbor</h3><span class="inj">noisy</span></header>
+    <dl>
+      <dt>What happens</dt><dd>ANALYTICS kicks off a full lake rebuild: lake-01/02 (<code>10.20.4.40-41</code>) → etl-01/02 (<code>10.20.3.30-31</code>) on tcp 50010, 64 parallel streams per server pair, about 1.6 Gbps, routed in L3 VNI 50020.</dd>
+      <dt>Use case</dt><dd>One tenant's batch job hurts everyone else's app. Many 5-tuples, so ECMP spreads it over every tier, unlike the elephant.</dd>
+      <dt>Without decode</dt><dd>"Everything went up." No way to say whose traffic it is.</dd>
+      <dt>With decode</dt><dd>VNI 50020 swells on all spines, and the Src Tenant dimension says ANALYTICS. Chargeback or rate-limit the right tenant.</dd>
+    </dl>
+    <div class="callout"><p>The rebuild's destination port, 50010, happens to match the PAYMENTS L3 VNI number. Don't let it confuse a filter: port 50010 is ANALYTICS traffic, VNI 50010 is PAYMENTS.</p></div>
+  </article>
+
+  <article class="scn" id="s-surge">
+    <header><h3>Internet surge into the fabric</h3><span class="inj">surge</span></header>
+    <dl>
+      <dt>What happens</dt><dd>About 1.2 Gbps of small UDP packets from up to 2,000 internet sources (<code>203.0.113.0/24</code>, <code>192.0.2.0/24</code>) aimed at web-01 <code>10.10.1.21</code> on UDP 443, entering through both edge_a and edge_b.</dd>
+      <dt>Use case</dt><dd>"Is this a launch or an attack?" Your edge already sees it. Decode follows it into the fabric: which edge, which superspine, which ToR, which server.</dd>
+      <dt>With decode</dt><dd>Outside IPs visible on spine and superspine links, inside the tunnel, with Kentik's geo and ASN enrichment applied (verify for your portal that enrichment runs on decoded inner IPs).</dd>
+    </dl>
+  </article>
+</section>
+
+<section id="filters">
+  <p class="eyebrow">6 · Cheat sheet</p>
+  <h2>IP and port filters worth trying</h2>
+  <p class="kicker">All of these come from the lab's flow definitions. Use them in Data Explorer filters or on the topology map. Inner IPs only match fabric links once decode is on.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Filter</th><th>Turn on</th><th>What it shows</th></tr></thead>
+    <tbody>
+      <tr><td><code>10.10.2.45</code> → <code>10.10.5.50</code>, dst port 10566</td><td><span class="tag t-flow">elephant</span></td><td>One 2.5 Gbps session lighting up a single cross-pod path while sibling links stay quiet</td></tr>
+      <tr><td><code>10.255.1.43</code> → <code>10.255.1.47</code>, UDP 4789</td><td><span class="tag t-flow">elephant</span></td><td>The same elephant as a VXLAN-unaware tool sees it: tor_c to tor_g, nothing more</td></tr>
+      <tr><td>src <code>10.10.1.0/24</code> → dst <code>10.20.0.0/16</code></td><td><span class="tag t-flow">leak</span></td><td>PAYMENTS reaching ANALYTICS. Should be near empty, then steps up when the leak starts. Add dst port 9092</td></tr>
+      <tr><td><code>10.10.1.21</code> → <code>10.20.3.30</code>, port 9092</td><td>none</td><td>The blocked cross-VRF attempt: seen only at tor_a, no VNI</td></tr>
+      <tr><td><code>10.10.1.21</code> → <code>10.10.2.45</code>, port 5432</td><td>none</td><td>web-01 to db-01 stays in pod 1 and turns at leaf_c</td></tr>
+      <tr><td><code>10.10.1.23</code> → <code>10.10.2.45</code>, port 5432</td><td>none</td><td>web-03 to db-01 has to climb to a superspine to cross pods</td></tr>
+      <tr><td><code>10.10.2.45</code> → <code>10.10.2.46</code>, port 5433</td><td>none</td><td>Database replication across pods, bridged in L2 VNI 10020</td></tr>
+      <tr><td>src <code>203.0.113.0/24</code> or <code>192.0.2.0/24</code></td><td>none, then <span class="tag t-flow">surge</span></td><td>Internet customers entering at edge_a / edge_b. With surge, a UDP 443 flood at <code>10.10.1.21</code></td></tr>
+      <tr><td>src <code>10.50.12.0/24</code> → <code>10.10.1.22</code>, port 443</td><td>none</td><td>Branch-12 users reaching the finance portal on web-02</td></tr>
+      <tr><td><code>10.20.4.40-41</code> → <code>10.20.3.30-31</code>, port 50010</td><td><span class="tag t-flow">noisy</span></td><td>The lake rebuild spread over every tier in VNI 50020</td></tr>
+      <tr><td><code>10.20.3.30-31</code> → <code>10.20.4.40-41</code>, port 8020</td><td>none</td><td>Baseline ETL to lake traffic in ANALYTICS, VNI 50020</td></tr>
+      <tr><td>Device superspine_a_dfw1 or superspine_b_dfw1</td><td>any</td><td>Superspines carry only cross-pod and internet traffic, a clean place to look</td></tr>
+    </tbody>
+  </table></div>
+  <p>VTEP reference: ToRs <code>10.255.1.41</code> (tor_a) to <code>10.255.1.48</code> (tor_h), edges <code>10.255.1.1-2</code>. Fabric interfaces: <code>Ethernet49</code>-<code>51</code> are uplinks, <code>Ethernet1</code>-<code>4</code> are downlinks or server ports.</p>
+</section>
+
+<section id="prompts">
+  <p class="eyebrow">7 · Kentik AI Advisor</p>
+  <h2>Prompts that produce good output</h2>
+  <p class="kicker">Run the lab for at least 15 minutes first, and turn on the scenario a prompt needs a few minutes before you ask, so there's a before and after. If an answer comes back with only <code>10.255.x</code> addresses, add "use the decapsulated inner VXLAN IPs, not the outer VTEP addresses."</p>
+
+  <h3>Elephant: find it, then show it</h3>
+  <div class="prompts">
+    <div class="pc"><div class="top"><span class="n">E1</span><span class="ttl">Let AI find the imbalance</span><span class="tag t-flow needs">elephant</span></div>
+      <p class="why"><b>Solves for:</b> "the network is slow" with no lead. AI Advisor finds the hot link and the flow behind it, which is the best demo moment.</p>
+      <blockquote>In the VXLAN Lab DFW1 site over the last 15 minutes, are any fabric links running much hotter than their parallel links? What traffic is driving the imbalance?<button class="copy" type="button">Copy</button></blockquote></div>
+    <div class="pc"><div class="top"><span class="n">E2</span><span class="ttl">Open the tunnel</span><span class="tag t-flow needs">elephant</span></div>
+      <p class="why"><b>Solves for:</b> the overlay vs underlay contrast. Turns tor_c to tor_g into a named conversation.</p>
+      <blockquote>For the busiest flow between tor_c_dfw1 and tor_g_dfw1, show the inner (overlay) source and destination IPs, the destination port and the VXLAN VNI, not just the outer VTEP addresses.<button class="copy" type="button">Copy</button></blockquote></div>
+    <div class="pc"><div class="top"><span class="n">E3</span><span class="ttl">Direct answer</span><span class="tag t-flow needs">elephant</span></div>
+      <p class="why"><b>Solves for:</b> a reliable answer when time is short. Expect db-01 → backup-01 on 10566 at about 2.5 Gbps.</p>
+      <blockquote>Show the top conversations by bits per second in the last 15 minutes, using the inner VXLAN source and destination IPs. Which single flow is the largest, which devices does it traverse, and what share of spine_b_dfw1's traffic is it?<button class="copy" type="button">Copy</button></blockquote></div>
+    <div class="pc"><div class="top"><span class="n">E4</span><span class="ttl">Draw the path and the saturated link</span><span class="tag t-flow needs">elephant</span></div>
+      <p class="why"><b>Solves for:</b> showing where the packet enters and leaves the tunnel, and which link is closest to full. If it won't draw one picture, ask for a Sankey of inner source IP → device → outer destination VTEP, then a time series of spine_b and superspine_b uplinks against spine_a and superspine_a.</p>
+      <blockquote>In the VXLAN Lab DFW1 site over the last 15 minutes, find the largest flow between 10.10.2.45 and 10.10.5.50 and build a visualization of its path through the fabric. Show it hop by hop: db-01 → tor ingress (where it's encapsulated into VXLAN), each spine/superspine hop (seen only as outer VTEP traffic 10.255.1.43 → 10.255.1.47 on UDP 4789), → tor egress (where it's decapsulated) → backup-01. Label which hops carry the inner IPs and which carry only the tunnel. Then show interface utilization for each link on that path next to its parallel links, and highlight the link closest to saturation.<button class="copy" type="button">Copy</button></blockquote></div>
+  </div>
+
+  <h3>Leak: catch the breach</h3>
+  <div class="prompts">
+    <div class="pc"><div class="top"><span class="n">L1</span><span class="ttl">Is any traffic crossing tenants?</span><span class="tag t-flow needs">leak</span></div>
+      <p class="why"><b>Solves for:</b> segmentation assurance. AI Advisor finds the cross-tenant flows, the hosts, ports and VNIs, and when it started.</p>
+      <blockquote>In the VXLAN Lab DFW1 site over the last 15 minutes, using the inner (decapsulated) VXLAN IPs, is there any traffic crossing between tenants? Specifically, any flows from the PAYMENTS network 10.10.0.0/16 to the ANALYTICS network 10.20.0.0/16. Show which hosts, ports and VNIs are involved, and when it started.<button class="copy" type="button">Copy</button></blockquote></div>
+    <div class="pc"><div class="top"><span class="n">L2</span><span class="ttl">Before and after, with a visual</span><span class="tag t-flow needs">leak</span></div>
+      <p class="why"><b>Solves for:</b> evidence for an incident. A near-empty line that steps up the moment the leak starts.</p>
+      <blockquote>Show a time series of bits per second from inner source 10.10.1.0/24 to inner destination 10.20.0.0/16 over the last hour, broken out by source IP, destination IP and destination port. Highlight when the traffic jumped above its normal baseline, and which ToR switch it entered the fabric on.<button class="copy" type="button">Copy</button></blockquote></div>
+  </div>
+
+  <h3>Ten visualization prompts using the custom dimensions</h3>
+  <p>These lean on the <code>c_src_</code> / <code>c_dst_</code> dimensions from <a href="#dimensions">section 8</a>. For a demo, <b>3</b> then <b>1</b> then <b>6</b> tells the clearest story: without decode you see tunnels, with decode you see tenants, and that's how you catch a breach.</p>
+  <div class="prompts" id="viz"></div>
+</section>
+
+<section id="dimensions">
+  <p class="eyebrow">8 · Context</p>
+  <h2>The custom dimensions and what each one does</h2>
+  <p class="kicker">A custom dimension is a label Kentik adds to every flow as it arrives. Populators decide the label: each one is a value plus match criteria, here a list of subnets and a direction. The lab creates four dimensions, each as a source and a destination pair, so eight in all.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Dimension</th><th>Columns in Kentik</th><th>Answers</th><th>Values</th></tr></thead>
+    <tbody>
+      <tr><td><b>Segment</b></td><td><code>c_src_segment</code><br><code>c_dst_segment</code></td><td>Which network segment (VLAN / L2 VNI) is this?</td><td>pay-web, pay-db, pay-backup, anl-etl, anl-lake, branch-12, internet, plus the underlay ranges: vtep-5stage, loopback-5stage, mgmt-5stage, vtep-3tier, loopback-3tier, mgmt-3tier</td></tr>
+      <tr><td><b>Tenant</b></td><td><code>c_src_tenant</code><br><code>c_dst_tenant</code></td><td>Whose traffic is it (the VRF)?</td><td><span class="tag t-pay">PAYMENTS</span> <span class="tag t-anl">ANALYTICS</span> <span class="tag t-und">UNDERLAY</span></td></tr>
+      <tr><td><b>Role</b></td><td><code>c_src_role</code><br><code>c_dst_role</code></td><td>What kind of thing is it?</td><td>web, db, backup, etl, lake, branch, internet, vtep, loopback, mgmt</td></tr>
+      <tr><td><b>Zone</b></td><td><code>c_src_zone</code><br><code>c_dst_zone</code></td><td>Where does it sit in the design?</td><td>overlay, external, underlay, mgmt</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Which subnet gets which value</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Subnet</th><th>Segment</th><th>Tenant</th><th>Role</th><th>Zone</th><th>VNI</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">10.10.1.0/24</td><td>pay-web</td><td>PAYMENTS</td><td>web</td><td>overlay</td><td>10010</td></tr>
+      <tr><td class="mono">10.10.2.0/24</td><td>pay-db</td><td>PAYMENTS</td><td>db</td><td>overlay</td><td>10020</td></tr>
+      <tr><td class="mono">10.10.5.0/24</td><td>pay-backup</td><td>PAYMENTS</td><td>backup</td><td>overlay</td><td>10025</td></tr>
+      <tr><td class="mono">10.20.3.0/24</td><td>anl-etl</td><td>ANALYTICS</td><td>etl</td><td>overlay</td><td>20030</td></tr>
+      <tr><td class="mono">10.20.4.0/24</td><td>anl-lake</td><td>ANALYTICS</td><td>lake</td><td>overlay</td><td>20040</td></tr>
+      <tr><td class="mono">10.50.12.0/24</td><td>branch-12</td><td>PAYMENTS</td><td>branch</td><td>external</td><td>50010</td></tr>
+      <tr><td class="mono">203.0.113.0/24<br>192.0.2.0/24</td><td>internet</td><td>PAYMENTS</td><td>internet</td><td>external</td><td>50010</td></tr>
+      <tr><td class="mono">10.255.1.0/24</td><td>vtep-5stage</td><td>UNDERLAY</td><td>vtep</td><td>underlay</td><td></td></tr>
+      <tr><td class="mono">10.0.1.0/24</td><td>loopback-5stage</td><td>UNDERLAY</td><td>loopback</td><td>underlay</td><td></td></tr>
+      <tr><td class="mono">192.168.251.0/24</td><td>mgmt-5stage</td><td>UNDERLAY</td><td>mgmt</td><td>mgmt</td><td></td></tr>
+      <tr><td class="mono">10.255.0.0/24</td><td>vtep-3tier</td><td>UNDERLAY</td><td>vtep</td><td>underlay</td><td></td></tr>
+      <tr><td class="mono">10.0.0.0/24</td><td>loopback-3tier</td><td>UNDERLAY</td><td>loopback</td><td>underlay</td><td></td></tr>
+      <tr><td class="mono">192.168.250.0/24</td><td>mgmt-3tier</td><td>UNDERLAY</td><td>mgmt</td><td>mgmt</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p>Branch and internet sources count as PAYMENTS because they're routed into the PAYMENTS VRF on L3 VNI 50010.</p>
+
+  <h3>Why they matter in a VXLAN demo</h3>
+  <ul>
+    <li><b>They're the before and after in one column.</b> Without decode, every spine flow matches only the VTEP range, so Src Tenant reads UNDERLAY and Src Role reads vtep. With sFlow Tunnel Decode, the same flows match the inner subnets and read PAYMENTS / web or ANALYTICS / lake.</li>
+    <li><b>Tenant</b> turns "VNI 50020" into "ANALYTICS", which is what a customer recognizes. It's the dimension for share-of-fabric, noisy neighbor and the leak alert (Src Tenant PAYMENTS, Dst Tenant ANALYTICS).</li>
+    <li><b>Role</b> draws the application dependency map: web → db, db → backup, etl → lake, internet → web.</li>
+    <li><b>Segment</b> splits a tenant into its VLANs, useful when one segment (anl-lake during <code>noisy</code>) is the problem.</li>
+    <li><b>Zone</b> separates north-south (external → overlay) from east-west (overlay → overlay), and shows how much traffic is plain underlay or management.</li>
+  </ul>
+
+  <h3>How the lab builds them</h3>
+  <p><code>python3 -m vxlanlab kentik dimensions</code> reads <code>vxlanlab/subnets.csv</code> and, through the Kentik v5 API:</p>
+  <ol class="steps">
+    <li>Looks up each of the eight dimensions by name and creates only the missing ones (string type, display names like "Src Tenant").</li>
+    <li>Groups the CSV by value, so each value is <b>one populator</b> whose address list holds all of its subnets. UNDERLAY is one populator with six ranges.</li>
+    <li>Sends each dimension's populators in one batch call with <code>replace_all</code>, direction <code>src</code> for <code>c_src_*</code> and <code>dst</code> for <code>c_dst_*</code>. Each dimension ends up holding exactly what the CSV says, so it's safe to re-run after editing the CSV. Anything added by hand to these eight dimensions is removed.</li>
+    <li>Spaces calls a second apart (<code>--delay</code>) and retries HTTP 429 with backoff.</li>
+  </ol>
+  <div class="callout warn"><p>Populators only tag flows that arrive after they exist. Create the dimensions, then let the lab run before demoing them. Use <code>--api-url https://api.kentik.eu/api/v5</code> for an EU portal.</p></div>
+</section>
+
+<section id="trouble">
+  <p class="eyebrow">9 · When it doesn't work</p>
+  <h2>Troubleshooting</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Symptom</th><th>Check</th></tr></thead>
+    <tbody>
+      <tr><td><code>Cannot assign requested address</code></td><td>Aliases missing. Run <code>sudo -E python3 -m vxlanlab aliases --apply</code>, or <code>--source-mode single</code> to send from one IP</td></tr>
+      <tr><td><code>No module named vxlanlab.__main__</code></td><td>You're in <code>~</code>, not in the repo. <code>cd ~/vxlanlab</code> first</td></tr>
+      <tr><td><code>Missing --plan-id / KENTIK_PLAN_ID</code></td><td>The env file isn't loaded, a line lacks <code>export</code>, has a space after <code>=</code>, or uses curly quotes. <code>source ~/.kentik.env</code>, and use <code>sudo -E</code> with sudo</td></tr>
+      <tr><td>Devices added as ICMP only</td><td><code>KENTIK_SNMP_CREDENTIAL</code> (or <code>KENTIK_AGENT_ID</code>) not set. It's the credential's name in the vault, not the community string</td></tr>
+      <tr><td>Wrong topology onboarded</td><td><code>VXLANLAB_TOPOLOGY</code> not exported, or dropped by sudo without <code>-E</code></td></tr>
+      <tr><td>Spines show only <code>10.255.x</code> on 4789</td><td>Decode isn't on for that device, or it's in VXLAN mode and you're grouping by the standard IP dimensions</td></tr>
+      <tr><td>Volume looks several times too high</td><td>You're summing across tiers. Pick one: spines, or ToR access ports</td></tr>
+      <tr><td>Interfaces named but no topology links</td><td>SNMP polling isn't on for every switch, or the lab wasn't started with <code>--snmp</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="foot">All volumes, addresses and MACs in the lab are made up, using RFC 1918 and documentation ranges. Kentik behavior comes from the <a href="https://kb.kentik.com/docs/using-vxlan" target="_blank" rel="noopener">Using VXLAN</a> KB article. Items marked "verify" should be confirmed in your portal or with the Kentik SE team. More detail lives in <code>docs/kentik-runbook.md</code>, and the interactive fabric map is <code>course/vxlan-5stage-fabric.html</code>.</p>
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+  // Ten visualization prompts
+  var viz = [
+    ["Tenant traffic map", "", "Who talks to whom at the tenant level, and any PAYMENTS ↔ ANALYTICS crossing in one picture.", "Build a Sankey diagram of the last hour of traffic in VXLAN Lab DFW1 flowing from c_src_tenant to c_dst_tenant, sized by bits per second. Call out any flows that cross between PAYMENTS and ANALYTICS."],
+    ["Who uses the fabric", "", "Each tenant's share of the network over time, the basis for capacity planning and chargeback.", "Show a stacked area chart of total fabric traffic over the last 6 hours broken down by c_src_tenant, so I can see each tenant's share of the network."],
+    ["Overlay vs underlay", "", "The money shot: how much traffic would look like anonymous tunnel traffic without VXLAN decode.", "Compare two views of the same traffic over the last hour: grouped by c_src_zone/c_dst_zone, and grouped by inner source and destination IPs. Show how much traffic would look like only UNDERLAY tunnel traffic without VXLAN decode."],
+    ["App dependency map", "", "Which application tiers depend on which, discovered from traffic rather than a diagram someone drew.", "Draw a dependency graph of application roles using c_src_role → c_dst_role (web, db, backup, etl, lake, branch, internet), with edge thickness by traffic volume and the destination ports on each edge."],
+    ["Elephant hunt", "elephant", "Finds the hottest fabric link, then names the application roles behind it.", "Show a heatmap of interface utilization across every Spine and Superspine link in VXLAN Lab DFW1 over the last hour. Highlight the hottest link, then identify the c_src_role and c_dst_role of the largest flow crossing it."],
+    ["Segmentation audit", "leak", "Compliance evidence: when cross-tenant traffic started and exactly what it was.", "Show a time series of traffic where c_src_tenant is PAYMENTS and c_dst_tenant is ANALYTICS over the last 2 hours. Mark when it rose above baseline, and list the top inner source and destination IPs and ports."],
+    ["North-south vs east-west", "", "How much of the fabric's load is customers coming in versus servers talking to each other.", "Show a donut chart of the last hour's traffic split by c_src_zone → c_dst_zone (external→overlay, overlay→overlay, overlay→external), then a time series of external→overlay traffic by c_dst_segment."],
+    ["Internet surge", "surge", "Follows outside traffic from the edge routers into the fabric, down to the server being hit.", "Visualize traffic from c_src_zone external to c_dst_role web over the last hour, broken out by edge device and destination IP. Did it enter through both edge_a_dfw1 and edge_b_dfw1 evenly?"],
+    ["Noisy neighbor", "noisy", "Names the segment eating the fabric and shows which tiers it consumes compared with other tenants.", "Rank c_src_segment values by traffic over the last hour as a bar chart. For the top segment, show which fabric layers (Top of Rack, Leaf, Spine, Superspine) it consumes and how that compares with the PAYMENTS segments."],
+    ["Exec summary", "", "A one-page health view for a manager: tenants, conversations, the busiest link and any breach.", "Build a one-page dashboard for VXLAN Lab DFW1: top tenants, top app-role conversations, the busiest fabric link, and any cross-tenant traffic, using c_src/c_dst tenant, role and segment. Write a three-sentence summary of fabric health."]
+  ];
+  var box = document.getElementById("viz");
+  viz.forEach(function(v, i){
+    var d = document.createElement("div"); d.className = "pc";
+    var top = document.createElement("div"); top.className = "top";
+    top.innerHTML = '<span class="n">' + (i+1) + '</span><span class="ttl"></span>' + (v[1] ? '<span class="tag t-flow needs">' + v[1] + '</span>' : '');
+    top.querySelector(".ttl").textContent = v[0];
+    var why = document.createElement("p"); why.className = "why"; why.innerHTML = "<b>Solves for:</b> "; why.appendChild(document.createTextNode(v[2]));
+    var q = document.createElement("blockquote"); q.textContent = v[3];
+    var b = document.createElement("button"); b.className = "copy"; b.type = "button"; b.textContent = "Copy"; q.appendChild(b);
+    d.appendChild(top); d.appendChild(why); d.appendChild(q); box.appendChild(d);
+  });
+
+  // Copy buttons
+  document.addEventListener("click", function(e){
+    var b = e.target.closest && e.target.closest(".copy"); if (!b) return;
+    var host = b.parentNode, text = "";
+    host.childNodes.forEach(function(n){ if (n !== b) text += n.textContent; });
+    text = text.trim();
+    var done = function(){ b.textContent = "Copied"; setTimeout(function(){ b.textContent = "Copy"; }, 1500); };
+    var fallback = function(){ var r = document.createRange(); r.selectNodeContents(host); var s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = "Selected"; setTimeout(function(){ b.textContent = "Copy"; }, 1500); };
+    try { navigator.clipboard.writeText(text).then(done, fallback); } catch (err) { fallback(); }
+  });
+
+  // 5-stage fabric map, from topology-5stage.json
+  var NS = "http://www.w3.org/2000/svg", svg = document.getElementById("fab");
+  var tiers = [
+    ["Edge", 40, ["edge_a","edge_b"]],
+    ["Superspine", 120, ["superspine_a","superspine_b"]],
+    ["Spine", 200, ["spine_a","spine_b","spine_c","spine_d"]],
+    ["Leaf", 280, ["leaf_a","leaf_b","leaf_c","leaf_d","leaf_e","leaf_f"]],
+    ["Top of Rack", 360, ["tor_a","tor_b","tor_c","tor_d","tor_e","tor_f","tor_g","tor_h"]]
+  ];
+  var pos = {}, X0 = 120, W = 840;
+  function place(names, y, x0, w){ names.forEach(function(n, i){ pos[n] = {x: x0 + w*(i+0.5)/names.length, y: y}; }); }
+  place(tiers[0][2], 40, X0 + W*0.25, W*0.5);
+  place(tiers[1][2], 120, X0 + W*0.25, W*0.5);
+  place(["spine_a","spine_b"], 200, X0, W/2); place(["spine_c","spine_d"], 200, X0 + W/2, W/2);
+  place(["leaf_a","leaf_b","leaf_c"], 280, X0, W/2); place(["leaf_d","leaf_e","leaf_f"], 280, X0 + W/2, W/2);
+  place(["tor_a","tor_b","tor_c","tor_d"], 360, X0, W/2); place(["tor_e","tor_f","tor_g","tor_h"], 360, X0 + W/2, W/2);
+  var servers = {tor_a:"web-01", tor_b:"web-02 lake-01", tor_c:"db-01", tor_d:"etl-01", tor_e:"web-03", tor_f:"db-02", tor_g:"backup-01 lake-02", tor_h:"etl-02"};
+  var links = [];
+  function mesh(a, b){ a.forEach(function(x){ b.forEach(function(y){ links.push([x,y]); }); }); }
+  mesh(["edge_a","edge_b"], ["superspine_a","superspine_b"]);
+  mesh(["superspine_a","superspine_b"], ["spine_a","spine_b","spine_c","spine_d"]);
+  mesh(["spine_a","spine_b"], ["leaf_a","leaf_b","leaf_c"]); mesh(["spine_c","spine_d"], ["leaf_d","leaf_e","leaf_f"]);
+  mesh(["leaf_a","leaf_b","leaf_c"], ["tor_a","tor_b","tor_c","tor_d"]); mesh(["leaf_d","leaf_e","leaf_f"], ["tor_e","tor_f","tor_g","tor_h"]);
+
+  var paths = {
+    elephant: {hops:["tor_c","leaf_b","spine_b","superspine_b","spine_d","leaf_f","tor_g"], src:"tor_c", dst:"tor_g",
+      note:"<b>db-01 → backup-01, tcp 10566, VNI 50010, 2.5 Gbps on one session.</b> Without decode, every hop between the ToRs reports only 10.255.1.43 → 10.255.1.47 on UDP 4789. The sibling path through spine_a and superspine_a stays quiet."},
+    web03: {hops:["tor_e","leaf_d","spine_d","superspine_b","spine_b","leaf_c","tor_c"], src:"tor_e", dst:"tor_c",
+      note:"<b>web-03 → db-01, tcp 5432, VNI 50010.</b> web-03 lives in pod 2, so the query climbs five switches to reach the database in pod 1. Outer header: 10.255.1.45 → 10.255.1.43."},
+    web01: {hops:["tor_a","leaf_c","tor_c"], src:"tor_a", dst:"tor_c",
+      note:"<b>web-01 → db-01, tcp 5432, VNI 50010.</b> Same pod, so it turns at a leaf and never touches a spine. Outer header: 10.255.1.41 → 10.255.1.43."},
+    leak: {hops:["tor_a","leaf_a","spine_a","superspine_a","spine_c","leaf_d","tor_h"], src:"tor_a", dst:"tor_h",
+      note:"<b>web-01 → etl-02, tcp 9092, VNI 50020</b> with the leak on. PAYMENTS reaching ANALYTICS across both pods. The outer header (10.255.1.41 → 10.255.1.48) looks like any other tunnel."},
+    surge: {hops:["edge_a","superspine_b","spine_a","leaf_c","tor_a"], src:"edge_a", dst:"tor_a",
+      note:"<b>Internet → web-01, UDP 443, VNI 50010.</b> One of up to 2,000 sources entering at edge_a (VTEP 10.255.1.1). The edge sees it unwrapped; inside the fabric it's 10.255.1.1 → 10.255.1.41 unless you decode."}
+  };
+
+  function el(tag, attrs, parent){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); (parent || svg).appendChild(e); return e; }
+  var css = getComputedStyle(document.documentElement);
+  var gLinks = el("g", {}), gHot = el("g", {}), gNodes = el("g", {});
+  tiers.forEach(function(t){
+    var lab = el("text", {x: 8, y: t[1] + 4, "font-size": 12, "font-family": "Public Sans, system-ui, sans-serif", "font-weight": 600, fill: "var(--ink-2)"}); lab.textContent = t[0];
+  });
+  el("line", {x1: X0 + W/2, y1: 170, x2: X0 + W/2, y2: 430, stroke: "var(--rule)", "stroke-dasharray": "4 4"});
+  [["Pod 1", X0 + W/4], ["Pod 2", X0 + 3*W/4]].forEach(function(p){ var t = el("text", {x: p[1], y: 458, "text-anchor": "middle", "font-size": 12, "font-family": "Public Sans, system-ui, sans-serif", fill: "var(--ink-2)"}); t.textContent = p[0]; });
+  links.forEach(function(l){ var a = pos[l[0]], b = pos[l[1]]; el("line", {x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:"var(--grid)", "stroke-width":1.2}, gLinks); });
+  var nodeEls = {};
+  Object.keys(pos).forEach(function(n){
+    var p = pos[n], w = 92, h = 26;
+    var g = el("g", {}, gNodes);
+    var r = el("rect", {x: p.x - w/2, y: p.y - h/2, width: w, height: h, rx: 6, fill: "var(--panel)", stroke: "var(--under)", "stroke-width": 1}, g);
+    var t = el("text", {x: p.x, y: p.y + 4, "text-anchor": "middle", "font-size": 11.5, "font-family": "IBM Plex Mono, ui-monospace, monospace", fill: "var(--ink)"}, g);
+    t.textContent = n;
+    nodeEls[n] = r;
+    if (servers[n]) { var s = el("text", {x: p.x, y: p.y + 34, "text-anchor": "middle", "font-size": 11, "font-family": "Public Sans, system-ui, sans-serif", fill: "var(--ink-2)"}, gNodes); s.textContent = servers[n]; }
+  });
+
+  function show(key){
+    var P = paths[key];
+    while (gHot.firstChild) gHot.removeChild(gHot.firstChild);
+    Object.keys(nodeEls).forEach(function(n){ nodeEls[n].setAttribute("stroke", "var(--under)"); nodeEls[n].setAttribute("stroke-width", 1); nodeEls[n].setAttribute("fill", "var(--panel)"); });
+    for (var i = 0; i < P.hops.length - 1; i++){
+      var a = pos[P.hops[i]], b = pos[P.hops[i+1]];
+      el("line", {x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:"var(--vni)", "stroke-width":4, "stroke-linecap":"round"}, gHot);
+    }
+    P.hops.forEach(function(n){ nodeEls[n].setAttribute("stroke", "var(--vni)"); nodeEls[n].setAttribute("stroke-width", 2); });
+    [P.src, P.dst].forEach(function(n){ nodeEls[n].setAttribute("stroke", "var(--flow)"); nodeEls[n].setAttribute("stroke-width", 2.5); });
+    document.getElementById("mapnote").innerHTML = P.note + ' <span class="t-flow">Orange</span>: the VTEP where the packet is wrapped or unwrapped. <span class="t-vni">Purple</span>: hops that see only the tunnel without decode.';
+    document.querySelectorAll(".mapbar button").forEach(function(b){ b.setAttribute("aria-pressed", b.dataset.p === key ? "true" : "false"); });
+  }
+  document.querySelector(".mapbar").addEventListener("click", function(e){ var b = e.target.closest("button"); if (b) show(b.dataset.p); });
+  show("elephant");
+})();
+</script>
+</body>
+</html>
