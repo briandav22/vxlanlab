@@ -14,16 +14,23 @@ from vxlanlab.fabric import Fabric  # noqa: E402
 
 
 class FakeKentik(BaseHTTPRequestHandler):
-    """Answers the three Device API calls the onboard command makes."""
+    """A stateful stand-in for the Device API calls the onboard command makes.
+
+    reject: names that fail. batch_create lists them under failedDevices with a
+    200, like the real API; a single create answers 400 with a reason.
+    silent: batch_create answers 200 {} and creates nothing.
+    """
     existing = {}
     calls = []
+    reject = set()
+    silent = False
 
     def log_message(self, *a):
         pass
 
-    def _reply(self, body):
+    def _reply(self, body, code=200):
         data = json.dumps(body).encode()
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -35,13 +42,27 @@ class FakeKentik(BaseHTTPRequestHandler):
         FakeKentik.calls.append((self.command, self.path, self.headers, body))
         return body
 
+    def _add(self, dev):
+        dev = dict(dev, id=str(100 + len(self.existing)))
+        FakeKentik.existing[dev["deviceName"]] = dev["id"]
+        return dev
+
     def do_GET(self):
         self._record()
         self._reply({"devices": [{"id": i, "deviceName": n} for n, i in self.existing.items()]})
 
     def do_POST(self):
         body = self._record()
-        self._reply({"devices": [dict(d, id=str(100 + k)) for k, d in enumerate(body["devices"])]})
+        if self.path.endswith("/batch_create"):
+            if self.silent:
+                return self._reply({})
+            ok = [self._add(d) for d in body["devices"] if d["deviceName"] not in self.reject]
+            bad = [d["deviceName"] for d in body["devices"] if d["deviceName"] in self.reject]
+            return self._reply({"devices": ok, "failedDevices": bad})
+        dev = body["device"]
+        if dev["deviceName"] in self.reject:
+            return self._reply({"code": 3, "message": "invalid device_name"}, 400)
+        self._reply({"device": self._add(dev)})
 
     def do_PUT(self):
         self._reply(self._record())
@@ -86,6 +107,8 @@ class OnboardCommandTests(unittest.TestCase):
     def setUp(self):
         FakeKentik.calls = []
         FakeKentik.existing = {"leaf-02": "777"}
+        FakeKentik.reject = set()
+        FakeKentik.silent = False
         self.srv = HTTPServer(("127.0.0.1", 0), FakeKentik)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = "http://127.0.0.1:%d" % self.srv.server_port
@@ -107,7 +130,9 @@ class OnboardCommandTests(unittest.TestCase):
         methods = [(c[0], c[1].split("?")[0]) for c in FakeKentik.calls]
         self.assertEqual(methods, [("GET", kentik.DEVICE_PATH),
                                    ("POST", kentik.DEVICE_PATH + "/batch_create"),
-                                   ("PUT", kentik.DEVICE_PATH + "/batch_update")])
+                                   ("PUT", kentik.DEVICE_PATH + "/batch_update"),
+                                   ("GET", kentik.DEVICE_PATH)])
+        self.assertIn("Verified: all 6", out)
         headers = FakeKentik.calls[0][2]
         self.assertEqual((headers["X-CH-Auth-Email"], headers["X-CH-Auth-API-Token"]), ("a@b.c", "t0k"))
         created = [d["deviceName"] for d in FakeKentik.calls[1][3]["devices"]]
@@ -117,6 +142,33 @@ class OnboardCommandTests(unittest.TestCase):
             kentik.build_devices(Fabric(), 11, agent_id="5", credential="lab", only=["leaf-02"])[0],
             id="777")])
         self.assertNotIn("t0k", out)
+
+    def creds(self):
+        return ["--api-url", self.url, "--email", "a", "--token", "b", "--plan-id", "1"]
+
+    def test_failed_devices_are_reported_with_reason(self):
+        FakeKentik.reject = {"spine-01"}
+        rc, out, err = self.run_cli(*self.creds())
+        self.assertEqual(rc, 1)
+        self.assertIn("1 of 6 device(s) are NOT in Kentik", err)
+        self.assertIn("spine-01", err)
+        self.assertIn("invalid device_name", err)
+        self.assertIn("--underscores", err)
+        self.assertNotIn("Verified", out)
+
+    def test_silent_batch_is_caught_and_retried(self):
+        FakeKentik.silent = True
+        rc, out, err = self.run_cli(*self.creds())
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.count("(on retry)"), 5)
+        self.assertIn("Verified: all 6", out)
+
+    def test_silent_batch_with_failing_retries(self):
+        FakeKentik.silent = True
+        FakeKentik.reject = set(Fabric().devices) - {"leaf-02"}
+        rc, _, err = self.run_cli(*self.creds())
+        self.assertEqual(rc, 1)
+        self.assertIn("5 of 6", err)
 
     def test_dry_run_makes_no_calls(self):
         rc, out, _ = self.run_cli("--api-url", self.url, "--dry-run")

@@ -49,6 +49,7 @@ def build_devices(fabric: Fabric, plan_id: Optional[int], site_id: Optional[int]
             "deviceSampleRate": rate,
             "deviceBgpType": "none",
             "deviceBgpFlowspec": False,
+            "minimizeSnmp": False,   # required for routers on create
         }
         if plan_id is not None:
             dev["planId"] = plan_id
@@ -110,3 +111,23 @@ class Client:
 
     def batch_update(self, devices: List[Dict]) -> Dict:
         return self._call("PUT", DEVICE_PATH + "/batch_update", {"devices": devices})
+
+    def create(self, device: Dict) -> Dict:
+        """Create one device. Unlike batch_create, a failure comes back as an HTTP error with a reason."""
+        return self._call("POST", DEVICE_PATH, {"device": device})
+
+    def update(self, device: Dict) -> Dict:
+        return self._call("PUT", DEVICE_PATH + "/" + urllib.parse.quote(device["id"]), {"device": device})
+
+
+def batch_failures(resp: Dict, sent: List[Dict], key: str) -> List[Dict]:
+    """The devices in sent that a batch call didn't apply.
+
+    batch_create and batch_update answer 200 even when devices fail. They list
+    failures in failedDevices (names for create, ids for update), and only the
+    devices that worked under devices. Anything sent that is in neither counts
+    as failed too.
+    """
+    done = {str(d.get(key)) for d in resp.get("devices", [])}
+    failed = {str(x) for x in resp.get("failedDevices", [])}
+    return [d for d in sent if str(d[key]) in failed or str(d[key]) not in done]
