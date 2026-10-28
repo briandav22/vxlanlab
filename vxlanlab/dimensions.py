@@ -1,17 +1,18 @@
 """Kentik custom dimensions for the lab's subnets, through the v5 API.
 
 Four dimensions (segment, tenant, role, zone), each as a source/destination
-pair: c_src_tenant gets one direction=src populator per subnet and
-c_dst_tenant the same with direction=dst. Values come from subnets.csv.
+pair. Values come from subnets.csv, grouped so each value is one populator
+whose addr lists every subnet with that value: c_src_tenant gets one
+UNDERLAY populator matching src addr in all the underlay subnets, and
+c_dst_tenant the same with direction dst.
 
 Dimensions are looked up by name and reused; only missing ones are created.
-For each dimension, populators are keyed by (addr, direction): missing ones
-are added and ones with a different value are updated, so running it twice
-is safe. Populators for subnets no longer in the CSV are left alone unless
-prune is asked for.
+Populators go up in one call per dimension through the batch API with
+replace_all, so each dimension ends up holding exactly what the CSV says
+(anything else on it is removed) and running it twice is safe.
 
-The v5 API rate-limits hard, so calls are spaced out (delay seconds apart)
-and an HTTP 429 is retried with backoff, honoring Retry-After when sent.
+Calls are spaced out (delay seconds apart) and an HTTP 429 is retried with
+backoff, honoring Retry-After when sent.
 
 Standard library only. Credentials come from the caller, never from here.
 """
@@ -23,7 +24,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .kentik import KentikError
 
@@ -42,38 +43,20 @@ def load_subnets(path: str = SUBNETS_CSV) -> List[Dict[str, str]]:
 
 
 def plan(rows: List[Dict[str, str]]) -> List[Dict]:
-    """The dimensions to have, each with the populators it should hold."""
+    """The dimensions to have, each with its populators: one per value, addr listing its subnets."""
     out = []
     for suffix, column in DIMENSIONS:
         for direction, label in DIRECTIONS:
-            pops = [{"value": r[column], "direction": direction, "addr": r["subnet"]}
-                    for r in rows if r.get(column)]
+            by_value = {}   # value -> subnets, in CSV order
+            for r in rows:
+                if r.get(column):
+                    by_value.setdefault(r[column], []).append(r["subnet"])
             out.append({"name": "c_%s_%s" % (direction, suffix),
                         "display_name": "%s %s" % (label, suffix.capitalize()),
-                        "type": "string", "populators": pops})
+                        "type": "string",
+                        "upserts": [{"value": v, "criteria": [{"direction": direction, "addr": addrs}]}
+                                    for v, addrs in by_value.items()]})
     return out
-
-
-def diff(want: List[Dict], have: List[Dict]) -> Tuple[List[Dict], List[Tuple[Dict, Dict]], List[Dict]]:
-    """Split wanted populators into (add, update, stale) against what a dimension has.
-
-    update pairs are (existing, wanted). stale are existing populators whose
-    (addr, direction) isn't wanted.
-    """
-    def key(p):
-        return (str(p.get("addr") or "").strip(), p.get("direction") or "either")
-
-    existing = {key(p): p for p in have}
-    wanted = {key(p) for p in want}
-    add, update = [], []
-    for p in want:
-        old = existing.get(key(p))
-        if old is None:
-            add.append(p)
-        elif str(old.get("value")) != p["value"]:
-            update.append((old, p))
-    stale = [p for k, p in existing.items() if k not in wanted]
-    return add, update, stale
 
 
 def retry_after(value) -> Optional[float]:
@@ -137,13 +120,7 @@ class Client:
         resp = self._call("POST", "/customdimension", body)
         return resp.get("customDimension", resp)
 
-    def create_populator(self, dim_id, pop: Dict) -> Dict:
-        resp = self._call("POST", "/customdimension/%s/populator" % dim_id, {"populator": pop})
-        return resp.get("populator", resp)
-
-    def update_populator(self, dim_id, pop_id, pop: Dict) -> Dict:
-        resp = self._call("PUT", "/customdimension/%s/populator/%s" % (dim_id, pop_id), {"populator": pop})
-        return resp.get("populator", resp)
-
-    def delete_populator(self, dim_id, pop_id) -> Dict:
-        return self._call("DELETE", "/customdimension/%s/populator/%s" % (dim_id, pop_id))
+    def replace_populators(self, name: str, upserts: List[Dict]) -> Dict:
+        """Make these the dimension's only populators, in one batch call."""
+        return self._call("POST", "/batch/customdimensions/%s/populators" % name,
+                          {"replace_all": True, "complete": True, "upserts": upserts})

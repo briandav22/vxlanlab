@@ -35,9 +35,6 @@ class FakeV5(BaseHTTPRequestHandler):
         FakeV5.calls.append((self.command, self.path, body))
         return body
 
-    def _dim(self, dim_id):
-        return next(d for d in self.dims.values() if str(d["id"]) == dim_id)
-
     def do_GET(self):
         self._record()
         self._reply({"customDimensions": list(self.dims.values())})
@@ -56,29 +53,16 @@ class FakeV5(BaseHTTPRequestHandler):
             d = dict(body, id=500 + len(self.dims), populators=[])
             FakeV5.dims[d["name"]] = d
             return self._reply({"customDimension": {k: v for k, v in d.items() if k != "populators"}})
-        d = self._dim(parts[1])
-        p = dict(body["populator"], id=9000 + len(FakeV5.calls), dimension_id=d["id"])
-        d["populators"].append(p)
-        self._reply({"populator": p})
-
-    def do_PUT(self):
-        body = self._record()
-        parts = self.path.strip("/").split("/")
-        d = self._dim(parts[1])
-        p = next(p for p in d["populators"] if str(p["id"]) == parts[3])
-        p.update(body["populator"])
-        self._reply({"populator": p})
-
-    def do_DELETE(self):
-        self._record()
-        parts = self.path.strip("/").split("/")
-        d = self._dim(parts[1])
-        d["populators"] = [p for p in d["populators"] if str(p["id"]) != parts[3]]
-        self._reply({})
+        # /batch/customdimensions/<name>/populators
+        d = FakeV5.dims[parts[2]]
+        assert body["replace_all"] and body["complete"]
+        d["populators"] = [{"value": u["value"], "direction": c["direction"], "addr": ",".join(c["addr"])}
+                           for u in body["upserts"] for c in u["criteria"]]
+        self._reply({"message": "Accepted batch", "guid": "abc"})
 
 
 class TestPlan(unittest.TestCase):
-    def test_eight_dimensions_one_populator_per_subnet(self):
+    def test_one_populator_per_value(self):
         rows = dimensions.load_subnets()
         want = dimensions.plan(rows)
         self.assertEqual([d["name"] for d in want],
@@ -86,26 +70,17 @@ class TestPlan(unittest.TestCase):
                           "c_src_role", "c_dst_role", "c_src_zone", "c_dst_zone"])
         for d in want:
             self.assertLessEqual(len(d["name"]), 20)
-            self.assertEqual(len(d["populators"]), len(rows))
-            self.assertEqual({p["direction"] for p in d["populators"]}, {d["name"][2:5]})
-        tenant = {p["addr"]: p["value"] for p in want[2]["populators"]}
-        self.assertEqual(tenant["10.10.1.0/24"], "PAYMENTS")
-        self.assertEqual(want[0]["populators"][0]["value"], "pay-web")
+            values = [u["value"] for u in d["upserts"]]
+            self.assertEqual(len(values), len(set(values)))
+            self.assertEqual(sum(len(u["criteria"][0]["addr"]) for u in d["upserts"]), len(rows))
+            self.assertEqual({u["criteria"][0]["direction"] for u in d["upserts"]}, {d["name"][2:5]})
+        tenant = {u["value"]: u["criteria"][0]["addr"] for u in want[2]["upserts"]}
+        self.assertEqual(sorted(tenant), ["ANALYTICS", "PAYMENTS", "UNDERLAY"])
+        self.assertEqual(len(tenant["UNDERLAY"]), 6)
+        self.assertIn("10.255.1.0/24", tenant["UNDERLAY"])
+        self.assertEqual(want[0]["upserts"][0]["value"], "pay-web")
         self.assertEqual(want[3]["display_name"], "Dst Tenant")
-        zones = {p["value"] for p in want[6]["populators"]}
-        self.assertEqual(zones, {"overlay", "external", "underlay", "mgmt"})
-
-    def test_diff(self):
-        want = [{"value": "a", "direction": "src", "addr": "10.0.0.0/24"},
-                {"value": "b", "direction": "src", "addr": "10.0.1.0/24"},
-                {"value": "c", "direction": "src", "addr": "10.0.2.0/24"}]
-        have = [{"id": 1, "value": "a", "direction": "src", "addr": "10.0.0.0/24"},
-                {"id": 2, "value": "old", "direction": "src", "addr": "10.0.1.0/24"},
-                {"id": 3, "value": "x", "direction": "src", "addr": "10.9.9.0/24"}]
-        add, update, stale = dimensions.diff(want, have)
-        self.assertEqual([p["addr"] for p in add], ["10.0.2.0/24"])
-        self.assertEqual([(o["id"], p["value"]) for o, p in update], [(2, "b")])
-        self.assertEqual([p["id"] for p in stale], [3])
+        self.assertEqual({u["value"] for u in want[6]["upserts"]}, {"overlay", "external", "underlay", "mgmt"})
 
 
 class TestThrottle(unittest.TestCase):
@@ -148,27 +123,26 @@ class TestCommand(unittest.TestCase):
             rc = cli.main(["kentik", "dimensions", "--api-url", self.url, "--delay", "0"] + list(argv))
         return rc, out.getvalue(), err.getvalue()
 
-    def test_creates_missing_and_fixes_existing(self):
+    def test_creates_missing_and_replaces_populators(self):
         rc, out, err = self.run_cli("--email", "a", "--token", "b")
         self.assertEqual(rc, 0, err)
-        n = len(dimensions.load_subnets())
         self.assertEqual(len(FakeV5.dims), 8)
         creates = [c for c in FakeV5.calls if c[0] == "POST" and c[1] == "/customdimension"]
         self.assertEqual(len(creates), 7)   # c_src_tenant already existed
-        self.assertNotIn("populators", creates[0][2])
+        self.assertNotIn("upserts", creates[0][2])
+        batches = [c for c in FakeV5.calls if c[1].startswith("/batch/")]
+        self.assertEqual(len(batches), 8)
         tenant = FakeV5.dims["c_src_tenant"]
         self.assertEqual(tenant["id"], 42)
-        by_addr = {p["addr"]: p["value"] for p in tenant["populators"]}
-        self.assertEqual(by_addr["10.10.1.0/24"], "PAYMENTS")
-        self.assertEqual(by_addr["172.16.0.0/16"], "GONE")   # not pruned by default
-        self.assertIn("left alone", out)
-        for d in FakeV5.dims.values():
-            self.assertGreaterEqual(len(d["populators"]), n)
+        by_value = {p["value"]: p["addr"] for p in tenant["populators"]}
+        self.assertEqual(sorted(by_value), ["ANALYTICS", "PAYMENTS", "UNDERLAY"])   # WRONG and GONE replaced
+        self.assertEqual(len(by_value["UNDERLAY"].split(",")), 6)
 
         FakeV5.calls = []
-        rc, out, err = self.run_cli("--email", "a", "--token", "b")
+        rc, _, err = self.run_cli("--email", "a", "--token", "b")
         self.assertEqual(rc, 0, err)
-        self.assertEqual([c[0] for c in FakeV5.calls], ["GET"])
+        self.assertEqual([c[0] for c in FakeV5.calls], ["GET"] + ["POST"] * 8)
+        self.assertTrue(all(c[1].startswith("/batch/") for c in FakeV5.calls[1:]))
 
     def test_rate_limit_is_retried(self):
         FakeV5.throttle = 3
@@ -182,12 +156,6 @@ class TestCommand(unittest.TestCase):
         rc, _, err = self.run_cli("--email", "a", "--token", "b", "--retries", "1")
         self.assertEqual(rc, 1)
         self.assertIn("HTTP 429", err)
-
-    def test_prune(self):
-        rc, _, err = self.run_cli("--email", "a", "--token", "b", "--prune")
-        self.assertEqual(rc, 0, err)
-        addrs = {p["addr"] for p in FakeV5.dims["c_src_tenant"]["populators"]}
-        self.assertNotIn("172.16.0.0/16", addrs)
 
     def test_dry_run_and_credentials(self):
         rc, out, _ = self.run_cli("--dry-run")

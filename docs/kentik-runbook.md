@@ -181,16 +181,15 @@ minutes. If not, see Troubleshooting at the end.
   it can, map 50010 → PAYMENTS, 50020 → ANALYTICS, 10010 → pay-web, and so on.
 - **Subnet dimensions from the API.** `python3 -m vxlanlab kentik dimensions`
   makes sure Kentik has `c_src_`/`c_dst_` custom dimensions for segment,
-  tenant, role and zone, and gives each one populator per subnet in
-  `vxlanlab/subnets.csv` (direction src for `c_src_*`, dst for `c_dst_*`). It
-  reuses dimensions that already exist, adds missing populators and fixes
-  wrong values, so it is safe to rerun after editing the CSV. It uses the
-  same `KENTIK_EMAIL` / `KENTIK_API_TOKEN` as `onboard`, and the US v5 API
+  tenant, role and zone, then sets each one's populators from
+  `vxlanlab/subnets.csv`: one populator per value (UNDERLAY, PAYMENTS, ...)
+  whose addr lists all of that value's subnets, direction src for `c_src_*`
+  and dst for `c_dst_*`. It uses the batch populator API with `replace_all`,
+  so each dimension ends up with exactly what the CSV says and anything else
+  on it is removed. Rerun it after editing the CSV. It uses the same
+  `KENTIK_EMAIL` / `KENTIK_API_TOKEN` as `onboard`, and the US v5 API
   (`--api-url https://api.kentik.eu/api/v5` for EU). `--dry-run` prints the
-  plan; `--prune` also deletes populators whose subnet left the CSV.
-  Calls go out one per second (`--delay`), and an HTTP 429 from Kentik's
-  rate limit is retried with backoff (`--retries`). If a run still ends
-  with failures, just run it again: it only sends what is missing.
+  plan. Calls are a second apart and HTTP 429 is retried with backoff.
   Populators only tag flows that arrive after they exist.
 
 | VNI | Kind | Meaning |
