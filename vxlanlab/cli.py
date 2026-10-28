@@ -269,6 +269,9 @@ def cmd_kentik_onboard(args) -> int:
         print("Unknown device(s): %s. Choose from %s" % (", ".join(unknown), ", ".join(fabric.devices)),
               file=sys.stderr)
         return 2
+    if args.site_id and args.site_name:
+        print("note: --site-id given, so --site-name is ignored", file=sys.stderr)
+        args.site_name = None
     devices = kentik.build_devices(
         fabric, plan_id=args.plan_id, site_id=args.site_id, agent_id=args.agent_id,
         credential=args.credential, template_id=args.template_id, sample_rate=args.sample_rate,
@@ -291,6 +294,15 @@ def cmd_kentik_onboard(args) -> int:
               "vault and pass its name.", file=sys.stderr)
 
     if args.dry_run:
+        if args.site_name:
+            print("# Site %r: used if it exists, else POST %s%s" % (args.site_name, args.api_url, kentik.SITE_PATH))
+            print(json.dumps({"site": kentik.new_site(args.site_name)}, indent=2))
+            print("# Every device below then gets that site's id as siteId")
+        if (args.site_name or args.site_id) and not args.no_layers:
+            print("# After the devices exist, the site's layers get their ids: "
+                  + "; ".join("%s = %s" % (layer, ", ".join(d.name for d in fabric.devices.values()
+                                                             if d.role in roles and (not only or d.name in only)))
+                              for layer, roles in kentik.LAYERS))
         print("# POST %s%s/batch_create" % (args.api_url, kentik.DEVICE_PATH))
         print("# (devices Kentik already has go to PUT .../batch_update with their \"id\" instead)")
         print(json.dumps({"devices": devices}, indent=2))
@@ -299,6 +311,11 @@ def cmd_kentik_onboard(args) -> int:
     client = kentik.Client(args.email, args.token, args.api_url)
     failures = {}   # device name -> why
     try:
+        if args.site_name:
+            site = _find_or_create_site(client, args.site_name, args)
+            args.site_id = int(site["id"])
+            for d in devices:
+                d["siteId"] = args.site_id
         create, update = kentik.split_existing(devices, client.existing_ids())
         if create:
             print("Creating %d device(s): %s" % (len(create), ", ".join(d["deviceName"] for d in create)))
@@ -335,7 +352,39 @@ def cmd_kentik_onboard(args) -> int:
         return 1
     print("Verified: all %d device(s) are in Kentik. Flow from 192.168.250.x will land on them "
           "once the lab is running." % len(devices))
+    if args.site_id and not args.no_layers:
+        try:
+            _place_in_layers(client, fabric, have, args)
+        except kentik.KentikError as e:
+            print("Devices are in Kentik, but setting the site's layers failed: %s" % e, file=sys.stderr)
+            return 1
     return 0
+
+
+def _find_or_create_site(client, title: str, args) -> dict:
+    for site in client.sites():
+        if site.get("title") == title:
+            print("Using site %r (id %s)" % (title, site.get("id")))
+            return site
+    site = client.create_site(kentik.new_site(title))
+    _show_raw(args, "create site", site)
+    if not site.get("id"):
+        raise kentik.KentikError("creating site %r returned no id" % title)
+    print("Created site %r (id %s) with layers %s" % (title, site["id"], ", ".join(n for n, _ in kentik.LAYERS)))
+    return site
+
+
+def _place_in_layers(client, fabric, ids, args) -> None:
+    site = next((s for s in client.sites() if str(s.get("id")) == str(args.site_id)), None)
+    if site is None:
+        raise kentik.KentikError("site id %s not found" % args.site_id)
+    assign = kentik.layer_assignments(fabric, ids, args.underscores)
+    resp = client.update_site(kentik.with_layers(site, assign))
+    _show_raw(args, "update site", resp)
+    names = {v: k for k, v in ids.items()}
+    for layer, dev_ids in assign.items():
+        print("  layer %-7s %s" % (layer, ", ".join(names[i] for i in dev_ids) or "-"))
+    print("Site %r layers set, so the site map draws Border, Spine and Leaf tiers." % site.get("title"))
 
 
 def _show_raw(args, call: str, resp) -> None:
@@ -601,6 +650,11 @@ def main(argv=None) -> int:
                     help="API base URL (env KENTIK_API_URL; EU: https://grpc.api.kentik.eu)")
     ko.add_argument("--plan-id", type=int, default=_env_int("KENTIK_PLAN_ID"), help="plan ID (env KENTIK_PLAN_ID)")
     ko.add_argument("--site-id", type=int, default=_env_int("KENTIK_SITE_ID"), help="site ID (env KENTIK_SITE_ID)")
+    ko.add_argument("--site-name", default=os.environ.get("KENTIK_SITE_NAME"),
+                    help="put the devices in this site, creating it (data center, with Border/Spine/Leaf "
+                    "layers) if no site has this title (env KENTIK_SITE_NAME)")
+    ko.add_argument("--no-layers", action="store_true",
+                    help="don't put the devices into the site's Border/Spine/Leaf layers")
     ko.add_argument("--agent-id", default=os.environ.get("KENTIK_AGENT_ID"),
                     help="Universal Agent ID that polls the devices (env KENTIK_AGENT_ID)")
     ko.add_argument("--credential",

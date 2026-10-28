@@ -24,6 +24,7 @@ class FakeKentik(BaseHTTPRequestHandler):
     calls = []
     reject = set()
     silent = False
+    sites = []
 
     def log_message(self, *a):
         pass
@@ -49,10 +50,16 @@ class FakeKentik(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._record()
+        if self.path.startswith(kentik.SITE_PATH):
+            return self._reply({"sites": self.sites})
         self._reply({"devices": [{"id": i, "deviceName": n} for n, i in self.existing.items()]})
 
     def do_POST(self):
         body = self._record()
+        if self.path == kentik.SITE_PATH:
+            site = dict(body["site"], id=str(900 + len(self.sites)))
+            FakeKentik.sites.append(site)
+            return self._reply({"site": site})
         if self.path.endswith("/batch_create"):
             if self.silent:
                 return self._reply({})
@@ -65,7 +72,11 @@ class FakeKentik(BaseHTTPRequestHandler):
         self._reply({"device": self._add(dev)})
 
     def do_PUT(self):
-        self._reply(self._record())
+        body = self._record()
+        if self.path.startswith(kentik.SITE_PATH + "/"):
+            FakeKentik.sites = [body["site"] if s["id"] == body["site"]["id"] else s for s in self.sites]
+            return self._reply(body)
+        self._reply(body)
 
 
 class PayloadTests(unittest.TestCase):
@@ -109,6 +120,7 @@ class OnboardCommandTests(unittest.TestCase):
         FakeKentik.existing = {"leaf-02": "777"}
         FakeKentik.reject = set()
         FakeKentik.silent = False
+        FakeKentik.sites = []
         self.srv = HTTPServer(("127.0.0.1", 0), FakeKentik)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = "http://127.0.0.1:%d" % self.srv.server_port
@@ -192,6 +204,45 @@ class OnboardCommandTests(unittest.TestCase):
             os.environ.update(env)
         self.assertIn("ICMP only", err)
         self.assertNotIn('"snmp"', out)
+
+    def layers(self, site):
+        names = {v: k for k, v in FakeKentik.existing.items()}
+        return [[(l["name"], sorted(names[i] for i in l["deviceIds"])) for l in row["layers"]]
+                for row in site["architecture"]]
+
+    def test_site_created_and_layers_set(self):
+        rc, out, err = self.run_cli(*self.creds(), "--site-name", "VXLAN Lab")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(FakeKentik.sites), 1)
+        site = FakeKentik.sites[0]
+        self.assertEqual((site["title"], site["type"]), ("VXLAN Lab", "SITE_TYPE_DATA_CENTER"))
+        creates = [c[3] for c in FakeKentik.calls if c[1].endswith("/batch_create")]
+        self.assertEqual({d["siteId"] for d in creates[0]["devices"]}, {900})
+        updates = [c[3] for c in FakeKentik.calls if c[1].endswith("/batch_update")]
+        self.assertEqual(updates[0]["devices"][0]["siteId"], 900)
+        self.assertEqual(self.layers(site), [[("Border", ["border-leaf"])],
+                                             [("Spine", ["spine-01", "spine-02"])],
+                                             [("Leaf", ["leaf-01", "leaf-02", "leaf-03"])]])
+
+    def test_existing_site_reused_and_other_layers_kept(self):
+        FakeKentik.existing["core-01"] = "555"
+        FakeKentik.sites = [{"id": "42", "title": "VXLAN Lab", "type": "SITE_TYPE_DATA_CENTER",
+                             "architecture": [{"layers": [{"name": "Core", "deviceIds": ["555"]}]},
+                                              {"layers": [{"name": "Leaf", "deviceIds": ["777", "555x"]}]}]}]
+        rc, out, err = self.run_cli(*self.creds(), "--site-name", "VXLAN Lab")
+        self.assertEqual(rc, 0, err)
+        site = FakeKentik.sites[0]
+        self.assertEqual(len(FakeKentik.sites), 1)
+        rows = [[l["name"] for l in row["layers"]] for row in site["architecture"]]
+        self.assertEqual(rows, [["Core"], ["Leaf"], ["Border"], ["Spine"]])
+        leaf = site["architecture"][1]["layers"][0]["deviceIds"]
+        self.assertIn("555x", leaf)     # someone else's device stays
+        self.assertEqual(leaf.count("777"), 1)
+
+    def test_no_layers(self):
+        rc, _, err = self.run_cli(*self.creds(), "--site-name", "VXLAN Lab", "--no-layers")
+        self.assertEqual(rc, 0, err)
+        self.assertFalse(any(c[0] == "PUT" and c[1].startswith(kentik.SITE_PATH) for c in FakeKentik.calls))
 
     def test_dry_run_makes_no_calls(self):
         rc, out, _ = self.run_cli("--api-url", self.url, "--dry-run")
