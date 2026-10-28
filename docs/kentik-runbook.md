@@ -188,6 +188,9 @@ minutes. If not, see Troubleshooting at the end.
   same `KENTIK_EMAIL` / `KENTIK_API_TOKEN` as `onboard`, and the US v5 API
   (`--api-url https://api.kentik.eu/api/v5` for EU). `--dry-run` prints the
   plan; `--prune` also deletes populators whose subnet left the CSV.
+  Calls go out one per second (`--delay`), and an HTTP 429 from Kentik's
+  rate limit is retried with backoff (`--retries`). If a run still ends
+  with failures, just run it again: it only sends what is missing.
   Populators only tag flows that arrive after they exist.
 
 | VNI | Kind | Meaning |

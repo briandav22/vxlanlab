@@ -16,6 +16,7 @@ class FakeV5(BaseHTTPRequestHandler):
     """A stateful stand-in for the v5 custom dimension and populator calls."""
     dims = {}
     calls = []
+    throttle = 0   # answer this many more POSTs with 429
 
     def log_message(self, *a):
         pass
@@ -43,6 +44,13 @@ class FakeV5(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self._record()
+        if FakeV5.throttle:
+            FakeV5.throttle -= 1
+            self.send_response(429)
+            self.send_header("Retry-After", "0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         parts = self.path.strip("/").split("/")
         if parts == ["customdimension"]:
             d = dict(body, id=500 + len(self.dims), populators=[])
@@ -100,9 +108,26 @@ class TestPlan(unittest.TestCase):
         self.assertEqual([p["id"] for p in stale], [3])
 
 
+class TestThrottle(unittest.TestCase):
+    def test_retry_after(self):
+        self.assertEqual(dimensions.retry_after("5"), 5.0)
+        self.assertIsNone(dimensions.retry_after(None))
+        self.assertIsNone(dimensions.retry_after("Wed, 21 Oct 2026 07:28:00 GMT"))
+
+    def test_calls_are_spaced_out(self):
+        waits = []
+        c = dimensions.Client("a", "b", "http://127.0.0.1:1", delay=1.0, retries=0, sleep=waits.append)
+        for _ in range(3):
+            with self.assertRaises(Exception):
+                c._call("GET", "/customdimensions")
+        self.assertEqual(len(waits), 2)
+        self.assertTrue(all(0 < w <= 1.0 for w in waits))
+
+
 class TestCommand(unittest.TestCase):
     def setUp(self):
         FakeV5.calls = []
+        FakeV5.throttle = 0
         FakeV5.dims = {"c_src_tenant": {"id": 42, "name": "c_src_tenant", "display_name": "Src Tenant",
                                         "type": "string", "populators": [
                                             {"id": 1, "value": "WRONG", "direction": "src",
@@ -120,7 +145,7 @@ class TestCommand(unittest.TestCase):
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = cli.main(["kentik", "dimensions", "--api-url", self.url] + list(argv))
+            rc = cli.main(["kentik", "dimensions", "--api-url", self.url, "--delay", "0"] + list(argv))
         return rc, out.getvalue(), err.getvalue()
 
     def test_creates_missing_and_fixes_existing(self):
@@ -144,6 +169,19 @@ class TestCommand(unittest.TestCase):
         rc, out, err = self.run_cli("--email", "a", "--token", "b")
         self.assertEqual(rc, 0, err)
         self.assertEqual([c[0] for c in FakeV5.calls], ["GET"])
+
+    def test_rate_limit_is_retried(self):
+        FakeV5.throttle = 3
+        rc, out, err = self.run_cli("--email", "a", "--token", "b")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.count("rate limited"), 3)
+        self.assertEqual(len(FakeV5.dims), 8)
+
+    def test_rate_limit_gives_up(self):
+        FakeV5.throttle = 1000
+        rc, _, err = self.run_cli("--email", "a", "--token", "b", "--retries", "1")
+        self.assertEqual(rc, 1)
+        self.assertIn("HTTP 429", err)
 
     def test_prune(self):
         rc, _, err = self.run_cli("--email", "a", "--token", "b", "--prune")

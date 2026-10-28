@@ -10,6 +10,9 @@ are added and ones with a different value are updated, so running it twice
 is safe. Populators for subnets no longer in the CSV are left alone unless
 prune is asked for.
 
+The v5 API rate-limits hard, so calls are spaced out (delay seconds apart)
+and an HTTP 429 is retried with backoff, honoring Retry-After when sent.
+
 Standard library only. Credentials come from the caller, never from here.
 """
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Dict, List, Optional, Tuple
@@ -72,10 +76,23 @@ def diff(want: List[Dict], have: List[Dict]) -> Tuple[List[Dict], List[Tuple[Dic
     return add, update, stale
 
 
+def retry_after(value) -> Optional[float]:
+    """Seconds from a Retry-After header given in seconds; None if absent or a date."""
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return None
+
+
 class Client:
-    def __init__(self, email: str, token: str, base_url: str = API_URL, timeout: float = 30):
+    def __init__(self, email: str, token: str, base_url: str = API_URL, timeout: float = 30,
+                 delay: float = 1.0, retries: int = 6, sleep=time.sleep):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
+        self.delay = delay        # seconds between calls
+        self.retries = retries    # 429 retries per call
+        self.sleep = sleep
+        self._last = None
         self.headers = {
             "X-CH-Auth-Email": email,
             "X-CH-Auth-API-Token": token,
@@ -84,16 +101,30 @@ class Client:
 
     def _call(self, method: str, path: str, body: Optional[Dict] = None) -> Dict:
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, method=method, headers=self.headers)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:2000]
-            raise KentikError("%s %s -> HTTP %d: %s" % (method, path, e.code, detail)) from None
-        except urllib.error.URLError as e:
-            raise KentikError("%s %s -> %s" % (method, path, e.reason)) from None
-        return json.loads(raw) if raw else {}
+        for attempt in range(self.retries + 1):
+            if self._last is not None:
+                wait = self.delay - (time.monotonic() - self._last)
+                if wait > 0:
+                    self.sleep(wait)
+            self._last = time.monotonic()
+            req = urllib.request.Request(self.base + path, data=data, method=method, headers=self.headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode(errors="replace")[:2000]
+                if e.code == 429 and attempt < self.retries:
+                    backoff = retry_after(e.headers.get("Retry-After"))
+                    if backoff is None:
+                        backoff = min(60, 2 ** (attempt + 1))
+                    print("  rate limited, waiting %gs (retry %d of %d)" % (backoff, attempt + 1, self.retries))
+                    self.sleep(backoff)
+                    continue
+                raise KentikError("%s %s -> HTTP %d: %s" % (method, path, e.code, detail)) from None
+            except urllib.error.URLError as e:
+                raise KentikError("%s %s -> %s" % (method, path, e.reason)) from None
+        raise AssertionError("unreachable")
 
     def dimensions(self) -> Dict[str, Dict]:
         """Dimension name -> dimension, populators included."""
