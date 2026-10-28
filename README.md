@@ -68,6 +68,7 @@ NAT, so run the relay on the droplet and point the Mac at it. See
 | `run` | Start the fabric. `--collector`, `--port`, `--sample-rate`, `--scale`, `--inject`, `--duration`, `--source-mode bind|single`, `--snmp` (`--snmp-port`, `--community`) |
 | `snmp` | SNMP only, no traffic (counters stay at 0). `--show` prints the LLDP neighbor table every switch reports |
 | `devices` | Table (or `--csv`) of the six exporters to add in Kentik |
+| `kentik onboard` | Create the six devices in Kentik through the API (or update them if they exist). `--dry-run` prints the payload. See the runbook, section 1.2 |
 | `paths` | How every flow crosses the fabric: L2 VNI, L3 VNI, local or dropped, which spine ECMP picks, the outer VTEP header |
 | `aliases` | Print, `--apply` or `--remove` the loopback aliases for the exporter IPs (Linux `ip`, macOS `ifconfig`) |
 | `relay` | Receive sFlow from anywhere and resend each datagram from its agent IP. Run it on the UA host |
