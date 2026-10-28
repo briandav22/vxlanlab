@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
+import os
 import platform
 import select
 import socket
@@ -12,7 +14,7 @@ import threading
 import time
 from typing import Dict, List
 
-from . import __version__, sflow
+from . import __version__, kentik, sflow
 from .snmp import SnmpServer
 from .engine import Engine, Exporter
 from .fabric import DEFAULT_TOPOLOGY, Fabric
@@ -244,6 +246,62 @@ def cmd_devices(args) -> int:
     for d in fabric.devices.values():
         ports = ", ".join("%s=%s" % (v["name"], v["desc"]) for _, v in sorted(ifs[d.name].items()))
         print("%-12s %-7s %-16s %-13s %s" % (d.name, d.role, d.mgmt_ip, d.vtep or "-", ports))
+    return 0
+
+
+# ------------------------------------------------------------------ kentik
+
+def _env_int(name: str):
+    v = os.environ.get(name)
+    return int(v) if v else None
+
+
+def cmd_kentik_onboard(args) -> int:
+    fabric = _fabric(args)
+    only = [n.strip() for v in (args.device or []) for n in v.split(",") if n.strip()]
+    unknown = [n for n in only if n not in fabric.devices]
+    if unknown:
+        print("Unknown device(s): %s. Choose from %s" % (", ".join(unknown), ", ".join(fabric.devices)),
+              file=sys.stderr)
+        return 2
+    devices = kentik.build_devices(
+        fabric, plan_id=args.plan_id, site_id=args.site_id, agent_id=args.agent_id,
+        credential=args.credential, template_id=args.template_id, sample_rate=args.sample_rate,
+        snmp_port=args.snmp_port, underscores=args.underscores, only=only)
+    if not args.dry_run:
+        missing = [flag for flag, v in (("--email / KENTIK_EMAIL", args.email),
+                                        ("--token / KENTIK_API_TOKEN", args.token),
+                                        ("--plan-id / KENTIK_PLAN_ID", args.plan_id)) if not v]
+        if missing:
+            print("Missing " + ", ".join(missing) + ". Use --dry-run to only print the payload.",
+                  file=sys.stderr)
+            return 2
+    if not args.agent_id:
+        print("note: no --agent-id, so no NMS/SNMP polling config is sent", file=sys.stderr)
+    elif not args.credential:
+        print("note: no --credential, so NMS will ping these devices but not poll SNMP", file=sys.stderr)
+
+    if args.dry_run:
+        print("# POST %s%s/batch_create" % (args.api_url, kentik.DEVICE_PATH))
+        print("# (devices Kentik already has go to PUT .../batch_update with their \"id\" instead)")
+        print(json.dumps({"devices": devices}, indent=2))
+        return 0
+
+    client = kentik.Client(args.email, args.token, args.api_url)
+    try:
+        create, update = kentik.split_existing(devices, client.existing_ids())
+        if create:
+            print("Creating %d device(s): %s" % (len(create), ", ".join(d["deviceName"] for d in create)))
+            resp = client.batch_create(create)
+            for d in resp.get("devices", []):
+                print("  created %-12s id %s" % (d.get("deviceName"), d.get("id")))
+        if update:
+            print("Updating %d existing device(s): %s" % (len(update), ", ".join(d["deviceName"] for d in update)))
+            client.batch_update(update)
+    except kentik.KentikError as e:
+        print("Kentik API error: %s" % e, file=sys.stderr)
+        return 1
+    print("Done. Flow from 192.168.250.x will land on these devices once the lab is running.")
     return 0
 
 
@@ -480,6 +538,33 @@ def main(argv=None) -> int:
     d.add_argument("--csv", action="store_true")
     d.add_argument("--sample-rate", type=int)
     d.set_defaults(func=cmd_devices)
+
+    k = sub.add_parser("kentik", help="onboard the lab's switches into Kentik via the API")
+    ksub = k.add_subparsers(dest="kentik_cmd", metavar="<action>")
+    ko = ksub.add_parser("onboard", help="create (or update) one Kentik device per switch",
+                         description="Create one Kentik device per fabric switch, or update it if a "
+                         "device with that name exists. Credentials and IDs come from flags or env vars.")
+    ko.add_argument("--email", default=os.environ.get("KENTIK_EMAIL"), help="API user email (env KENTIK_EMAIL)")
+    ko.add_argument("--token", default=os.environ.get("KENTIK_API_TOKEN"),
+                    help="API token (env KENTIK_API_TOKEN; prefer the env var so it stays out of shell history)")
+    ko.add_argument("--api-url", default=os.environ.get("KENTIK_API_URL", kentik.API_URL),
+                    help="API base URL (env KENTIK_API_URL; EU: https://grpc.api.kentik.eu)")
+    ko.add_argument("--plan-id", type=int, default=_env_int("KENTIK_PLAN_ID"), help="plan ID (env KENTIK_PLAN_ID)")
+    ko.add_argument("--site-id", type=int, default=_env_int("KENTIK_SITE_ID"), help="site ID (env KENTIK_SITE_ID)")
+    ko.add_argument("--agent-id", default=os.environ.get("KENTIK_AGENT_ID"),
+                    help="Universal Agent ID that polls the devices (env KENTIK_AGENT_ID)")
+    ko.add_argument("--credential", default=os.environ.get("KENTIK_SNMP_CREDENTIAL"),
+                    help="SNMP credential name in the Kentik credential vault (env KENTIK_SNMP_CREDENTIAL)")
+    ko.add_argument("--template-id", type=int, default=_env_int("KENTIK_MONITORING_TEMPLATE"),
+                    help="monitoring template ID (env KENTIK_MONITORING_TEMPLATE)")
+    ko.add_argument("--sample-rate", type=int, help="override sample rate (default from topology)")
+    ko.add_argument("--snmp-port", type=int, default=161, help="SNMP port the agent polls (default 161)")
+    ko.add_argument("--device", action="append", help="only these switches, e.g. --device leaf-01,leaf-02")
+    ko.add_argument("--underscores", action="store_true",
+                    help="name devices leaf_01 instead of leaf-01, if your account rejects hyphens")
+    ko.add_argument("--dry-run", action="store_true", help="print the payload, don't call the API")
+    ko.set_defaults(func=cmd_kentik_onboard)
+    k.set_defaults(func=lambda a: (k.print_help(), 1)[1])
 
     pth = sub.add_parser("paths", help="show how each flow crosses the fabric (VNI, spine, VTEPs)")
     pth.add_argument("--flow", help="only flows whose name contains this")

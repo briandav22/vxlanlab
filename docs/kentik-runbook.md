@@ -42,6 +42,45 @@ For each row, add a device in Kentik:
 Kentik matches flow to a device by the IP the datagrams come from. That's why
 each fake switch needs its own source IP, which `aliases --apply` sets up.
 
+#### Or let the lab add them through the API
+
+`kentik onboard` creates all six through the Kentik Device API
+(`v202504beta2`, `batch_create`). If a device with the same name already
+exists, it's updated in place (`batch_update` with its id), so it's safe to
+run again. Every device is a router with sFlow from its mgmt IP, and NMS
+polling of that same IP through your Universal Agent.
+
+Credentials and portal IDs come from env vars, or the matching flags. Keep the
+token in an env var so it stays out of shell history and out of the repo.
+
+| Env var | Flag | What it is |
+|---|---|---|
+| `KENTIK_EMAIL` | `--email` | API user email |
+| `KENTIK_API_TOKEN` | `--token` | API token |
+| `KENTIK_PLAN_ID` | `--plan-id` | Plan the devices go on. Required |
+| `KENTIK_SITE_ID` | `--site-id` | Site. Optional |
+| `KENTIK_AGENT_ID` | `--agent-id` | Universal Agent that polls them. Without it, no NMS config is sent |
+| `KENTIK_SNMP_CREDENTIAL` | `--credential` | SNMP credential name in the credential vault (v2c, `public`). Without it, NMS only pings |
+| `KENTIK_MONITORING_TEMPLATE` | `--template-id` | Monitoring template. Optional |
+| `KENTIK_API_URL` | `--api-url` | Default `https://grpc.api.kentik.com`. EU: `https://grpc.api.kentik.eu` |
+
+```bash
+export KENTIK_EMAIL=you@example.com
+read -rs KENTIK_API_TOKEN && export KENTIK_API_TOKEN
+export KENTIK_PLAN_ID=1234 KENTIK_SITE_ID=5678 KENTIK_AGENT_ID=91011
+export KENTIK_SNMP_CREDENTIAL=lab-public KENTIK_MONITORING_TEMPLATE=1213
+
+python3 -m vxlanlab kentik onboard --dry-run   # print the payload, no API call
+python3 -m vxlanlab kentik onboard             # create (or update) the six devices
+python3 -m vxlanlab kentik onboard --device leaf-01,leaf-02   # just some
+```
+
+Device names match each switch's `sysName` (`leaf-01`), which the LLDP
+topology needs (section 1.6). **(verify)** the API docs list device names as
+letters, digits and underscores. If your account rejects the hyphens, add
+`--underscores` to create `leaf_01` and so on, and the topology map may not
+match names until sysName agrees.
+
 ### 1.3 Turn on VXLAN decode
 
 Per the KB, decode only works with sFlow, and it's chosen by the device
