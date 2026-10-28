@@ -5,6 +5,10 @@ its mgmt IP, SNMP goes through a credential from the Kentik credential vault.
 Devices Kentik doesn't have yet go to batch_create; devices it already has
 (matched by name) go to batch_update with their id, so running it twice is safe.
 
+With a site, the switches also go into its architecture: border-leaf in the
+Border layer, spines in Spine, leaves in Leaf (Site API v202509). That's how
+Kentik knows each device's role; the Device API has no writable role field.
+
 Standard library only. Credentials come from the caller, never from here.
 """
 from __future__ import annotations
@@ -19,6 +23,10 @@ from .fabric import Fabric
 
 API_URL = "https://grpc.api.kentik.com"   # EU: https://grpc.api.kentik.eu
 DEVICE_PATH = "/device/v202504beta2/device"
+SITE_PATH = "/site/v202509/sites"
+
+# Site layers, top to bottom, and the topology roles that go in each.
+LAYERS = [("Border", ("border",)), ("Spine", ("spine",)), ("Leaf", ("leaf",))]
 
 
 class KentikError(Exception):
@@ -66,6 +74,44 @@ def build_devices(fabric: Fabric, plan_id: Optional[int], site_id: Optional[int]
     return out
 
 
+def new_site(title: str) -> Dict:
+    """A data-center site with empty Border, Spine and Leaf layers."""
+    return {"title": title, "type": "SITE_TYPE_DATA_CENTER",
+            "architecture": [{"layers": [{"name": name, "deviceIds": []}]} for name, _ in LAYERS]}
+
+
+def layer_assignments(fabric: Fabric, ids: Dict[str, str], underscores: bool = False) -> Dict[str, List[str]]:
+    """Layer name -> Kentik device ids, for the switches that have an id."""
+    out = {}
+    for name, roles in LAYERS:
+        out[name] = [ids[kentik_name(d.name, underscores)] for d in fabric.devices.values()
+                     if d.role in roles and kentik_name(d.name, underscores) in ids]
+    return out
+
+
+def with_layers(site: Dict, assign: Dict[str, List[str]]) -> Dict:
+    """A copy of site with each device in its layer and no other.
+
+    Layers and devices that aren't the lab's are left alone. Missing layers are
+    added as new rows, in LAYERS order.
+    """
+    ours = {i for ids in assign.values() for i in ids}
+    arch = json.loads(json.dumps(site.get("architecture") or []))
+    seen = set()
+    for row in arch:
+        for layer in row.get("layers", []):
+            name = layer.get("name")
+            keep = [i for i in layer.get("deviceIds", []) if i not in ours]
+            if name in assign and name not in seen:
+                keep += assign[name]
+                seen.add(name)
+            layer["deviceIds"] = keep
+    for name, _ in LAYERS:
+        if name not in seen and name in assign:
+            arch.append({"layers": [{"name": name, "deviceIds": list(assign[name])}]})
+    return dict(site, architecture=arch)
+
+
 def split_existing(devices: List[Dict], existing: Dict[str, str]) -> Tuple[List[Dict], List[Dict]]:
     """(to_create, to_update). existing maps Kentik device name -> id."""
     create, update = [], []
@@ -111,6 +157,15 @@ class Client:
 
     def batch_update(self, devices: List[Dict]) -> Dict:
         return self._call("PUT", DEVICE_PATH + "/batch_update", {"devices": devices})
+
+    def sites(self) -> List[Dict]:
+        return self._call("GET", SITE_PATH).get("sites", [])
+
+    def create_site(self, site: Dict) -> Dict:
+        return self._call("POST", SITE_PATH, {"site": site}).get("site", {})
+
+    def update_site(self, site: Dict) -> Dict:
+        return self._call("PUT", SITE_PATH + "/" + urllib.parse.quote(str(site["id"])), {"site": site}).get("site", {})
 
     def create(self, device: Dict) -> Dict:
         """Create one device. Unlike batch_create, a failure comes back as an HTTP error with a reason."""

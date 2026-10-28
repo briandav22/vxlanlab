@@ -58,7 +58,8 @@ token in an env var so it stays out of shell history and out of the repo.
 | `KENTIK_EMAIL` | `--email` | API user email |
 | `KENTIK_API_TOKEN` | `--token` | API token |
 | `KENTIK_PLAN_ID` | `--plan-id` | Plan the devices go on. Required |
-| `KENTIK_SITE_ID` | `--site-id` | Site. Optional |
+| `KENTIK_SITE_NAME` | `--site-name` | Site to put the devices in. Created if no site has that title (data center, layers Border, Spine, Leaf). Optional |
+| `KENTIK_SITE_ID` | `--site-id` | An existing site, by id. Wins over `--site-name`. Optional |
 | `KENTIK_AGENT_ID` | `--agent-id` | Universal Agent that polls them. Without it, no NMS config is sent |
 | `KENTIK_SNMP_CREDENTIAL` (or `KENTIK_CREDENTIAL_NAME`) | `--credential` | The **name** of an SNMP credential in Kentik's credential vault (Settings, Credentials). Create one first: SNMP v2c, community `public`. Without it, devices are ICMP only |
 | `KENTIK_MONITORING_TEMPLATE` | `--template-id` | Monitoring template. Optional |
@@ -79,6 +80,18 @@ Afterwards it lists the account's devices and checks all six are there. Kentik's
 batch calls answer 200 even when some devices fail, so for any device that
 didn't land, it retries that one alone to get Kentik's reason, prints it, and
 exits 1. `--verbose` prints every raw API response.
+
+With a site (`--site-name` or `--site-id`), each switch also goes into the
+site's architecture layer for its role: `border-leaf` in **Border**, the
+spines in **Spine**, the leaves in **Leaf**. Layers are rows top to bottom in
+that order, so the site map draws the tiers. That's the only role Kentik's API
+lets you set: the device's own `role` field is read-only. Layers and devices
+already in the site that aren't the lab's are left alone. `--no-layers` skips
+this step.
+
+```bash
+python3 -m vxlanlab kentik onboard --site-name "VXLAN Lab"
+```
 
 Device names match each switch's `sysName` (`leaf-01`), which the LLDP
 topology needs (section 1.6). **(verify)** the API docs list device names as
