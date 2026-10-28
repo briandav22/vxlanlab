@@ -420,7 +420,8 @@ def cmd_kentik_dimensions(args) -> int:
     if args.dry_run:
         print("# %d subnet(s) from %s" % (len(rows), args.csv))
         print("# Each dimension is created with POST %s/customdimension only if no dimension has its "
-              "name, then gets POST .../customdimension/<id>/populator per missing populator" % args.api_url)
+              "name, then its populators are replaced with POST "
+              "%s/batch/customdimensions/<name>/populators (replace_all)" % (args.api_url, args.api_url))
         print(json.dumps(want, indent=2))
         return 0
     missing = [flag for flag, v in (("--email / KENTIK_EMAIL", args.email),
@@ -439,44 +440,21 @@ def cmd_kentik_dimensions(args) -> int:
     for dim in want:
         name = dim["name"]
         try:
-            cur = have.get(name)
-            if cur is None:
+            if name not in have:
                 cur = client.create_dimension(dim)
                 _show_raw(args, "create " + name, cur)
                 if not cur.get("id"):
                     raise kentik.KentikError("creating %s returned no id" % name)
                 print("Created dimension %s (%r, id %s)" % (name, dim["display_name"], cur["id"]))
-            add, update, stale = dimensions.diff(dim["populators"], cur.get("populators") or [])
-            print("%s: %d populator(s) to add, %d to update, %d already right"
-                  % (name, len(add), len(update), len(dim["populators"]) - len(add) - len(update)))
+            resp = client.replace_populators(name, dim["upserts"])
+            _show_raw(args, "populators " + name, resp)
+            print("%s: %d populator(s), replacing whatever it had" % (name, len(dim["upserts"])))
+            for u in dim["upserts"]:
+                print("  %-22s %s" % (u["value"], ", ".join(u["criteria"][0]["addr"])))
         except kentik.KentikError as e:
             failures.append("%s: %s" % (name, e))
-            continue
-        dim_id = cur["id"]
-        for pop in add:
-            try:
-                _show_raw(args, "populator", client.create_populator(dim_id, pop))
-                print("  added   %-18s %s" % (pop["addr"], pop["value"]))
-            except kentik.KentikError as e:
-                failures.append("%s %s: %s" % (name, pop["addr"], e))
-        for old, pop in update:
-            try:
-                _show_raw(args, "populator", client.update_populator(dim_id, old["id"], pop))
-                print("  updated %-18s %s -> %s" % (pop["addr"], old.get("value"), pop["value"]))
-            except kentik.KentikError as e:
-                failures.append("%s %s: %s" % (name, pop["addr"], e))
-        for old in stale:
-            if not args.prune:
-                print("  not in CSV, left alone: %s %s = %s (--prune deletes it)"
-                      % (old.get("direction"), old.get("addr"), old.get("value")))
-                continue
-            try:
-                client.delete_populator(dim_id, old["id"])
-                print("  deleted %-18s %s" % (old.get("addr"), old.get("value")))
-            except kentik.KentikError as e:
-                failures.append("%s delete %s: %s" % (name, old.get("addr"), e))
     if failures:
-        print("%d change(s) failed:" % len(failures), file=sys.stderr)
+        print("%d dimension(s) failed:" % len(failures), file=sys.stderr)
         for f in failures:
             print("  " + f, file=sys.stderr)
         return 1
@@ -755,8 +733,9 @@ def main(argv=None) -> int:
     ko.set_defaults(func=cmd_kentik_onboard)
     kd = ksub.add_parser("dimensions", help="create segment/tenant/role/zone custom dimensions from subnets.csv",
                          description="Make sure c_src_ and c_dst_ custom dimensions exist for segment, tenant, "
-                         "role and zone, and that each has one populator per subnet in the CSV (src for "
-                         "c_src_*, dst for c_dst_*). Existing dimensions are reused; safe to run again.")
+                         "role and zone, and replace each one's populators with one per value in the CSV, matching "
+                         "all of that value's subnets (src for c_src_*, dst for c_dst_*). Existing dimensions "
+                         "are reused; safe to run again.")
     kd.add_argument("--email", default=os.environ.get("KENTIK_EMAIL"), help="API user email (env KENTIK_EMAIL)")
     kd.add_argument("--token", default=os.environ.get("KENTIK_API_TOKEN"),
                     help="API token (env KENTIK_API_TOKEN; prefer the env var so it stays out of shell history)")
@@ -768,8 +747,6 @@ def main(argv=None) -> int:
                     help="seconds between API calls, to stay under Kentik's rate limit (default 1)")
     kd.add_argument("--retries", type=int, default=6,
                     help="times to retry a call that gets HTTP 429, with backoff (default 6)")
-    kd.add_argument("--prune", action="store_true",
-                    help="delete populators on these dimensions whose subnet isn't in the CSV")
     kd.add_argument("--dry-run", action="store_true", help="print the dimensions and populators, don't call the API")
     kd.add_argument("--verbose", "-v", action="store_true", help="print every API response")
     kd.set_defaults(func=cmd_kentik_dimensions)
