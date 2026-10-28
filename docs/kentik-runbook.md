@@ -58,7 +58,7 @@ token in an env var so it stays out of shell history and out of the repo.
 | `KENTIK_EMAIL` | `--email` | API user email |
 | `KENTIK_API_TOKEN` | `--token` | API token |
 | `KENTIK_PLAN_ID` | `--plan-id` | Plan the devices go on. Required |
-| `KENTIK_SITE_NAME` | `--site-name` | Site to put the devices in. Created if no site has that title (data center, layers Border, Spine, Leaf). Optional |
+| `KENTIK_SITE_NAME` | `--site-name` | Site to put the devices in. Created if no site has that title (data center, layers Border, Spine, Leaf; Edge, Superspine, Spine, Leaf, Top of Rack for `5stage`). Optional |
 | `KENTIK_SITE_ID` | `--site-id` | An existing site, by id. Wins over `--site-name`. Optional |
 | `KENTIK_AGENT_ID` | `--agent-id` | Universal Agent that polls them. Without it, no NMS config is sent |
 | `KENTIK_SNMP_CREDENTIAL` (or `KENTIK_CREDENTIAL_NAME`) | `--credential` | The **name** of an SNMP credential in Kentik's credential vault (Settings, Credentials). Create one first: SNMP v2c, community `public`. Without it, devices are ICMP only |
@@ -98,6 +98,30 @@ topology needs (section 1.6). **(verify)** the API docs list device names as
 letters, digits and underscores. If your account rejects the hyphens, add
 `--underscores` to create `leaf_01` and so on, and the topology map may not
 match names until sysName agrees.
+
+#### The 5-stage topology
+
+The lab also ships a bigger fabric shaped like Kentik's demo DFW1 site: 2
+edge routers, 2 superspines, 4 spines and 6 leaves in two pods, and 8
+top-of-rack switches (22 devices, `edge_a_dfw1` … `tor_h_dfw1`, sending from
+192.168.251.x). Select it with `--topology 5stage` (or `-t 5stage`) on any
+command, or `export VXLANLAB_TOPOLOGY=5stage` once (use `sudo -E` so sudo
+keeps it). Onboarding is the same command:
+
+```bash
+export VXLANLAB_TOPOLOGY=5stage
+sudo -E python3 -m vxlanlab aliases --apply
+python3 -m vxlanlab kentik onboard --site-name "VXLAN Lab DFW1"
+sudo -E python3 -m vxlanlab run --snmp
+```
+
+The site gets five layers, top to bottom: **Edge** (edge_a/b), **Superspine**,
+**Spine**, **Leaf** and **Top of Rack** (the 8 ToRs). SNMP goes through the
+same `KENTIK_SNMP_CREDENTIAL`, and LLDP reports all 48 fabric links from both
+ends. Give it its own site name: names and IPs don't overlap with the 3-tier
+lab, so both can be onboarded and run side by side, but one site holding both
+would draw a confusing map. The interactive map of this fabric is
+[`course/vxlan-5stage-fabric.html`](../course/vxlan-5stage-fabric.html).
 
 ### 1.3 Turn on VXLAN decode
 

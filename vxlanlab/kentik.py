@@ -5,9 +5,11 @@ its mgmt IP, SNMP goes through a credential from the Kentik credential vault.
 Devices Kentik doesn't have yet go to batch_create; devices it already has
 (matched by name) go to batch_update with their id, so running it twice is safe.
 
-With a site, the switches also go into its architecture: border-leaf in the
-Border layer, spines in Spine, leaves in Leaf (Site API v202509). That's how
-Kentik knows each device's role; the Device API has no writable role field.
+With a site, the switches also go into its architecture, one layer per tier
+(Site API v202509): Border/Spine/Leaf for the 3-tier lab, Edge/Superspine/
+Spine/Leaf/Top of Rack for the 5-stage one. The topology's site_layers says
+which roles go where. That's how Kentik knows each device's role; the Device
+API has no writable role field.
 
 Standard library only. Credentials come from the caller, never from here.
 """
@@ -25,8 +27,16 @@ API_URL = "https://grpc.api.kentik.com"   # EU: https://grpc.api.kentik.eu
 DEVICE_PATH = "/device/v202504beta2/device"
 SITE_PATH = "/site/v202509/sites"
 
-# Site layers, top to bottom, and the topology roles that go in each.
+# Site layers, top to bottom, and the topology roles that go in each. A topology
+# can set its own with "site_layers"; this is the 3-tier lab's.
 LAYERS = [("Border", ("border",)), ("Spine", ("spine",)), ("Leaf", ("leaf",))]
+
+
+def layers_for(fabric: Fabric) -> List[Tuple[str, Tuple[str, ...]]]:
+    custom = fabric.cfg.get("site_layers")
+    if not custom:
+        return LAYERS
+    return [(name, tuple(roles)) for name, roles in custom]
 
 
 class KentikError(Exception):
@@ -74,16 +84,16 @@ def build_devices(fabric: Fabric, plan_id: Optional[int], site_id: Optional[int]
     return out
 
 
-def new_site(title: str) -> Dict:
-    """A data-center site with empty Border, Spine and Leaf layers."""
+def new_site(title: str, layers=LAYERS) -> Dict:
+    """A data-center site with one empty layer per tier (Border, Spine and Leaf by default)."""
     return {"title": title, "type": "SITE_TYPE_DATA_CENTER",
-            "architecture": [{"layers": [{"name": name, "deviceIds": []}]} for name, _ in LAYERS]}
+            "architecture": [{"layers": [{"name": name, "deviceIds": []}]} for name, _ in layers]}
 
 
 def layer_assignments(fabric: Fabric, ids: Dict[str, str], underscores: bool = False) -> Dict[str, List[str]]:
     """Layer name -> Kentik device ids, for the switches that have an id."""
     out = {}
-    for name, roles in LAYERS:
+    for name, roles in layers_for(fabric):
         out[name] = [ids[kentik_name(d.name, underscores)] for d in fabric.devices.values()
                      if d.role in roles and kentik_name(d.name, underscores) in ids]
     return out
@@ -93,7 +103,7 @@ def with_layers(site: Dict, assign: Dict[str, List[str]]) -> Dict:
     """A copy of site with each device in its layer and no other.
 
     Layers and devices that aren't the lab's are left alone. Missing layers are
-    added as new rows, in LAYERS order.
+    added as new rows, in assign's order (top to bottom).
     """
     ours = {i for ids in assign.values() for i in ids}
     arch = json.loads(json.dumps(site.get("architecture") or []))
@@ -106,8 +116,8 @@ def with_layers(site: Dict, assign: Dict[str, List[str]]) -> Dict:
                 keep += assign[name]
                 seen.add(name)
             layer["deviceIds"] = keep
-    for name, _ in LAYERS:
-        if name not in seen and name in assign:
+    for name in assign:
+        if name not in seen:
             arch.append({"layers": [{"name": name, "deviceIds": list(assign[name])}]})
     return dict(site, architecture=arch)
 

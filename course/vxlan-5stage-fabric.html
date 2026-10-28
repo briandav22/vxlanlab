@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important} body{margin:0} img{max-width:100%}</style>
+<title>VXLAN 5-Stage Fabric</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: same trace bench as the 3-tier walkthrough. Tiered map on top (bands named like Kentik's site layers), the hop-by-hop sample readout under it, then the switch inspector, the comparison and the onboarding recipe. */
+:root{
+  --paper:#edf1f3; --panel:#fbfcfd; --sunk:#e3e9ed; --ink:#122029; --ink-2:#51616e; --rule:#cad4db; --grid:#dbe3e8;
+  --under:#44607e; --vni:#7343be; --inner:#087e62; --flow:#c75a0b; --pay:#1f6fd6; --anl:#bc376a; --drop:#c22c27;
+  --fd:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --fb:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --fm:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+    --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0d1317; --panel:#131b21; --sunk:#0f171c; --ink:#e1e8ec; --ink-2:#91a2ae; --rule:#27343d; --grid:#17222a;
+  --under:#8ea7c2; --vni:#b394f3; --inner:#3fc8a0; --flow:#f39a48; --pay:#64a6f6; --anl:#ef7aa7; --drop:#f26a60;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--fb);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--flow);outline-offset:2px}
+a{color:var(--under)}
+.wrap{max-width:1500px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:22px 56px;display:grid;gap:26px}
+@media (min-width:1000px){.wrap{padding-left:max(28px,env(safe-area-inset-left,0px));padding-right:max(28px,env(safe-area-inset-right,0px))}}
+.eyebrow{font:600 11.5px/1.2 var(--fm);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin:0}
+h1{font-family:var(--fd);font-stretch:78%;font-weight:800;font-size:clamp(30px,5vw,52px);line-height:.98;letter-spacing:-.01em;margin:0;text-wrap:balance}
+h2{font-family:var(--fd);font-stretch:82%;font-weight:800;font-size:clamp(22px,2.6vw,30px);line-height:1.05;margin:0;text-wrap:balance}
+h3{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:17px;margin:0}
+.mono{font-family:var(--fm)}
+.top{display:grid;gap:18px}
+@media (min-width:1100px){.top{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:end}}
+.mast{display:grid;gap:10px;max-width:68ch}
+.lede{margin:0;color:var(--ink-2);font-size:16px}
+.lede b{color:var(--ink);font-weight:600}
+.tiers{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.tier{display:grid;gap:2px;padding:10px 10px 9px;background:var(--panel);border:1px solid var(--rule);border-radius:6px}
+.tier b{font:800 26px/1 var(--fd);font-stretch:80%;font-variant-numeric:tabular-nums}
+.tier span{font:600 10.5px/1.25 var(--fm);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
+@media (max-width:520px){.tiers{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.sec-head{display:grid;gap:6px;max-width:72ch}
+.sec-head p{margin:0;color:var(--ink-2)}
+
+/* scenario picker */
+.seg{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:6px}
+.seg button{display:grid;gap:1px;text-align:left;padding:9px 11px;border:1px solid var(--rule);background:var(--panel);border-radius:8px;cursor:pointer}
+.seg button b{font-family:var(--fd);font-stretch:88%;font-weight:700;font-size:15px;line-height:1.15}
+.seg button span{font:500 11px/1.3 var(--fm);color:var(--ink-2)}
+.seg button[aria-checked="true"]{border-color:var(--ink);background:var(--sunk);box-shadow:inset 0 -3px 0 var(--ink)}
+
+/* map */
+.map-card{background-color:var(--panel);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:22px 22px;border:1px solid var(--rule);border-radius:10px;padding:8px;min-width:0}
+.map-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#map{display:block;width:100%;height:auto}
+@media (max-width:980px){#map{width:980px;max-width:none}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:8px 6px 2px;font:500 11.5px/1.3 var(--fm);color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:18px;height:0;border-top:2.5px solid var(--c)}
+.band{fill:color-mix(in srgb,var(--ink) 2.5%,transparent)}
+.band.alt{fill:transparent}
+.blab{font:600 10.5px var(--fm);letter-spacing:.12em;fill:var(--ink-2)}
+.pod{fill:none;stroke:color-mix(in srgb,var(--under) 40%,var(--rule));stroke-dasharray:5 4;stroke-width:1.2}
+.podlab{font:600 10px var(--fm);letter-spacing:.1em;fill:var(--under)}
+.ln{stroke:var(--under);stroke-opacity:.28;stroke-width:1.3}
+.ln.acc{stroke-opacity:.45}
+.ln.ext{stroke:var(--ink-2);stroke-dasharray:4 3;stroke-opacity:.5}
+.ln.live{stroke:var(--vni);stroke-opacity:1;stroke-width:3.4}
+.ln.live.plain{stroke:var(--inner)}
+.ln.live.dead{stroke:var(--drop)}
+.nd{cursor:pointer}
+.nd rect{fill:var(--panel);stroke:color-mix(in srgb,var(--under) 55%,var(--rule));stroke-width:1.3}
+.nd.vtep rect{stroke:var(--under);stroke-width:2}
+.nd text{font:600 11px var(--fm);fill:var(--ink)}
+.nd .sub{font:500 9px var(--fm);fill:var(--ink-2)}
+.nd.on rect{fill:color-mix(in srgb,var(--vni) 14%,var(--panel));stroke:var(--vni);stroke-width:2.4}
+.nd.cur rect{stroke:var(--flow);stroke-width:3}
+.nd.sel rect{stroke:var(--ink);stroke-width:2.4}
+.nd.drop rect{stroke:var(--drop);stroke-width:3;fill:color-mix(in srgb,var(--drop) 12%,var(--panel))}
+.hs rect{stroke-width:1.2}
+.hs.PAYMENTS rect{fill:color-mix(in srgb,var(--pay) 10%,var(--panel));stroke:var(--pay)}
+.hs.ANALYTICS rect{fill:color-mix(in srgb,var(--anl) 10%,var(--panel));stroke:var(--anl)}
+.hs text{font:500 10px var(--fm);fill:var(--ink)}
+.hs.on rect{stroke-width:2.6}
+.ext rect{fill:var(--sunk);stroke:var(--ink-2);stroke-dasharray:4 3}
+.ext text{font:600 10.5px var(--fm);fill:var(--ink)}
+.tick{fill:var(--flow);font:700 10px var(--fm)}
+
+/* trace readout */
+.trace{display:grid;gap:14px}
+.about{margin:0;max-width:80ch}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:600 11.5px var(--fm);padding:3px 8px;border-radius:999px;border:1px solid var(--rule);background:var(--panel)}
+.chip.vni{color:var(--vni);border-color:color-mix(in srgb,var(--vni) 50%,var(--rule))}
+.chip.drop{color:var(--drop);border-color:var(--drop)}
+.hops{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.hop{display:grid;gap:6px;align-content:start;text-align:left;padding:11px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--panel);cursor:pointer;min-width:0}
+.hop[aria-pressed="true"]{border-color:var(--flow);box-shadow:inset 0 3px 0 var(--flow)}
+.hop .hh{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.hop .hn{font:700 13px var(--fm)}
+.hop .ht{font:600 10.5px var(--fm);color:var(--ink-2);letter-spacing:.06em;text-transform:uppercase}
+.hop .meta{font:500 11.5px/1.4 var(--fm);color:var(--ink-2)}
+.stack{display:grid;gap:3px;margin:0;padding:0;list-style:none}
+.stack li{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;font:500 11.5px/1.35 var(--fm);padding:4px 7px;border-radius:4px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 7%,transparent)}
+.stack li span:first-child{color:var(--c);font-weight:600}
+.stack li span:last-child{overflow-wrap:anywhere}
+.L-o{--c:var(--under)} .L-v{--c:var(--vni)} .L-i{--c:var(--inner)} .L-d{--c:var(--drop)}
+
+/* inspector */
+.insp{display:grid;gap:14px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px}
+@media (min-width:900px){.insp{grid-template-columns:minmax(0,300px) minmax(0,1fr)}}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;margin:0;font:500 13px var(--fm)}
+.kv dt{color:var(--ink-2)}
+.kv dd{margin:0;overflow-wrap:anywhere}
+.tbl-wrap{overflow-x:auto;min-width:0}
+table{border-collapse:collapse;width:100%;font:500 12.5px var(--fm);font-variant-numeric:tabular-nums}
+th{font:600 10.5px var(--fm);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule)}
+td{padding:6px 10px;border-bottom:1px solid var(--grid);vertical-align:top}
+.cmp td:first-child{color:var(--ink-2)}
+.cmp td{font-family:var(--fb);font-size:14px}
+pre{margin:0;padding:12px 14px;background:var(--sunk);border:1px solid var(--rule);border-radius:8px;font:500 12.5px/1.5 var(--fm);overflow-x:auto}
+.two{display:grid;gap:18px}
+@media (min-width:1000px){.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.note{margin:0;color:var(--ink-2);font-size:14px;max-width:80ch}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="mast">
+      <p class="eyebrow">vxlanlab · 5-stage topology · <a href="vxlan-fabric-walkthrough.html">3-tier walkthrough</a></p>
+      <h1>VXLAN 5-Stage Fabric</h1>
+      <p class="lede">The same lab, shaped like Kentik's demo DFW1 site. <b>Servers plug into top-of-rack switches</b>, which are the VTEPs. Leaves and spines form two pods, <b>superspines tie the pods together</b>, and <b>edge routers</b> bring the internet in. Every switch sends sFlow and answers SNMP with LLDP, so Kentik draws this exact map.</p>
+    </div>
+    <div class="tiers" aria-label="Switches per tier">
+      <div class="tier"><b>2</b><span>Edge</span></div>
+      <div class="tier"><b>2</b><span>Superspine</span></div>
+      <div class="tier"><b>4</b><span>Spine</span></div>
+      <div class="tier"><b>6</b><span>Leaf</span></div>
+      <div class="tier"><b>8</b><span>Top of Rack</span></div>
+    </div>
+  </header>
+
+  <section class="trace" aria-label="Follow a flow">
+    <div class="sec-head">
+      <p class="eyebrow">Follow a flow</p>
+      <h2>Pick a conversation from the lab</h2>
+      <p>Each one is a real session the lab sends, with the path its ECMP hash picks. Tap a switch on the map to inspect it, or a hop below to see the sFlow sample that switch exports.</p>
+    </div>
+    <div class="seg" role="radiogroup" aria-label="Scenario" id="seg"></div>
+    <div class="map-card">
+      <div class="map-scroll"><svg id="map" viewBox="0 0 1200 720" role="img" aria-label="Five tier map: 2 edge routers, 2 superspines, 4 spines and 6 leaves in two pods, 8 top-of-rack switches with servers below"></svg></div>
+      <div class="legend">
+        <span><i style="--c:var(--vni)"></i>VXLAN-encapsulated (outer VTEP header + VNI)</span>
+        <span><i style="--c:var(--inner)"></i>Original packet, before encap</span>
+        <span><i style="--c:var(--drop)"></i>Dropped</span>
+        <span><i style="--c:var(--pay)"></i>VRF PAYMENTS server</span>
+        <span><i style="--c:var(--anl)"></i>VRF ANALYTICS server</span>
+      </div>
+    </div>
+    <p class="about" id="about"></p>
+    <div class="chips" id="chips"></div>
+    <div class="hops" id="hops"></div>
+  </section>
+
+  <section aria-label="Switch inspector" class="trace">
+    <div class="sec-head">
+      <p class="eyebrow">Switch inspector</p>
+      <h2 id="i-title">tor_a_dfw1</h2>
+      <p>What Kentik learns from this switch: the sending IP it matches flow on, the site layer it goes in, and the LLDP neighbors it reports over SNMP.</p>
+    </div>
+    <div class="insp">
+      <dl class="kv" id="i-kv"></dl>
+      <div class="tbl-wrap"><table><thead><tr><th>Local port</th><th>LLDP neighbor</th><th>Their port</th><th>Kind</th></tr></thead><tbody id="i-nb"></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="two">
+    <div class="trace">
+      <div class="sec-head">
+        <p class="eyebrow">Compared to the default lab</p>
+        <h2>What a 5-stage fabric changes</h2>
+      </div>
+      <div class="tbl-wrap"><table class="cmp">
+        <thead><tr><th></th><th>3-tier (default)</th><th>5-stage</th></tr></thead>
+        <tbody>
+          <tr><td>Switches</td><td>6: 2 spines, 3 leaves, 1 border leaf</td><td>22: 2 edge, 2 superspine, 4 spine, 6 leaf, 8 ToR</td></tr>
+          <tr><td>VTEPs</td><td>The leaves and border-leaf</td><td>The 8 ToRs and the 2 edge routers</td></tr>
+          <tr><td>Where servers plug in</td><td>Leaves</td><td>Top-of-rack switches</td></tr>
+          <tr><td>Internet enters at</td><td>border-leaf</td><td>edge_a / edge_b (clients split across both)</td></tr>
+          <tr><td>Switches a cross-rack packet crosses</td><td>3: leaf, spine, leaf</td><td>Same pod: 3 (ToR, leaf, ToR). Across pods: 7 (ToR, leaf, spine, superspine, spine, leaf, ToR)</td></tr>
+          <tr><td>ECMP choices per flow</td><td>1 (which spine)</td><td>Up to 3 (which leaf, which spine, which superspine)</td></tr>
+          <tr><td>Kentik site layers</td><td>Border, Spine, Leaf</td><td>Edge, Superspine, Spine, Leaf, Top of Rack</td></tr>
+          <tr><td>Mgmt / sFlow IPs</td><td>192.168.250.x</td><td>192.168.251.x</td></tr>
+          <tr><td>VRFs, VNIs, servers, flows, injects</td><td colspan="2">Identical. Only the path between servers changes.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">The VXLAN story is the same at any size: the ToR samples the original packet, and every switch above it only sees VTEP-to-VTEP UDP 4789 unless the collector decodes VXLAN. A 5-stage fabric just has more of those blind hops.</p>
+    </div>
+    <div class="trace">
+      <div class="sec-head">
+        <p class="eyebrow">Run it and onboard it</p>
+        <h2>Two commands pick the topology</h2>
+      </div>
+<pre>export VXLANLAB_TOPOLOGY=5stage      # or --topology 5stage on any command
+sudo -E python3 -m vxlanlab aliases --apply
+sudo -E python3 -m vxlanlab run --snmp
+
+# Kentik: 22 devices, a site with five layers
+export KENTIK_EMAIL=… KENTIK_API_TOKEN=… KENTIK_PLAN_ID=…
+export KENTIK_AGENT_ID=… KENTIK_SNMP_CREDENTIAL=lab-snmp
+python3 -m vxlanlab -t 5stage kentik onboard \
+    --site-name "VXLAN Lab DFW1"</pre>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Site layer</th><th>Devices</th></tr></thead>
+        <tbody id="layers"></tbody>
+      </table></div>
+      <p class="note">Use its own site name. Both labs can live in one Kentik account at once: names and sending IPs don't overlap. Leave <span class="mono">VXLANLAB_TOPOLOGY</span> unset and everything runs the 3-tier lab as before.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+const DATA = {"devices":[{"n":"edge_a_dfw1","role":"edge","layer":"Edge","pod":null,"ip":"192.168.251.1","vtep":"10.255.1.1","lo":null,"nb":[["Ethernet1","fw-edge","ethernet1/1","firewall"],["Ethernet2","fw-edge","ethernet1/2","firewall"],["Ethernet49","superspine_a_dfw1","Ethernet49","switch"],["Ethernet50","superspine_b_dfw1","Ethernet49","switch"]]},{"n":"edge_b_dfw1","role":"edge","layer":"Edge","pod":null,"ip":"192.168.251.2","vtep":"10.255.1.2","lo":null,"nb":[["Ethernet1","fw-edge","ethernet1/1","firewall"],["Ethernet2","fw-edge","ethernet1/2","firewall"],["Ethernet49","superspine_a_dfw1","Ethernet50","switch"],["Ethernet50","superspine_b_dfw1","Ethernet50","switch"]]},{"n":"superspine_a_dfw1","role":"superspine","layer":"Superspine","pod":null,"ip":"192.168.251.11","vtep":null,"lo":"10.0.1.11","nb":[["Ethernet1","spine_a_dfw1","Ethernet49","switch"],["Ethernet2","spine_b_dfw1","Ethernet49","switch"],["Ethernet3","spine_c_dfw1","Ethernet49","switch"],["Ethernet4","spine_d_dfw1","Ethernet49","switch"],["Ethernet49","edge_a_dfw1","Ethernet49","switch"],["Ethernet50","edge_b_dfw1","Ethernet49","switch"]]},{"n":"superspine_b_dfw1","role":"superspine","layer":"Superspine","pod":null,"ip":"192.168.251.12","vtep":null,"lo":"10.0.1.12","nb":[["Ethernet1","spine_a_dfw1","Ethernet50","switch"],["Ethernet2","spine_b_dfw1","Ethernet50","switch"],["Ethernet3","spine_c_dfw1","Ethernet50","switch"],["Ethernet4","spine_d_dfw1","Ethernet50","switch"],["Ethernet49","edge_a_dfw1","Ethernet50","switch"],["Ethernet50","edge_b_dfw1","Ethernet50","switch"]]},{"n":"spine_a_dfw1","role":"spine","layer":"Spine","pod":1,"ip":"192.168.251.21","vtep":null,"lo":"10.0.1.21","nb":[["Ethernet1","leaf_a_dfw1","Ethernet49","switch"],["Ethernet2","leaf_b_dfw1","Ethernet49","switch"],["Ethernet3","leaf_c_dfw1","Ethernet49","switch"],["Ethernet49","superspine_a_dfw1","Ethernet1","switch"],["Ethernet50","superspine_b_dfw1","Ethernet1","switch"]]},{"n":"spine_b_dfw1","role":"spine","layer":"Spine","pod":1,"ip":"192.168.251.22","vtep":null,"lo":"10.0.1.22","nb":[["Ethernet1","leaf_a_dfw1","Ethernet50","switch"],["Ethernet2","leaf_b_dfw1","Ethernet50","switch"],["Ethernet3","leaf_c_dfw1","Ethernet50","switch"],["Ethernet49","superspine_a_dfw1","Ethernet2","switch"],["Ethernet50","superspine_b_dfw1","Ethernet2","switch"]]},{"n":"spine_c_dfw1","role":"spine","layer":"Spine","pod":2,"ip":"192.168.251.23","vtep":null,"lo":"10.0.1.23","nb":[["Ethernet1","leaf_d_dfw1","Ethernet49","switch"],["Ethernet2","leaf_e_dfw1","Ethernet49","switch"],["Ethernet3","leaf_f_dfw1","Ethernet49","switch"],["Ethernet49","superspine_a_dfw1","Ethernet3","switch"],["Ethernet50","superspine_b_dfw1","Ethernet3","switch"]]},{"n":"spine_d_dfw1","role":"spine","layer":"Spine","pod":2,"ip":"192.168.251.24","vtep":null,"lo":"10.0.1.24","nb":[["Ethernet1","leaf_d_dfw1","Ethernet50","switch"],["Ethernet2","leaf_e_dfw1","Ethernet50","switch"],["Ethernet3","leaf_f_dfw1","Ethernet50","switch"],["Ethernet49","superspine_a_dfw1","Ethernet4","switch"],["Ethernet50","superspine_b_dfw1","Ethernet4","switch"]]},{"n":"leaf_a_dfw1","role":"leaf","layer":"Leaf","pod":1,"ip":"192.168.251.31","vtep":null,"lo":"10.0.1.31","nb":[["Ethernet1","tor_a_dfw1","Ethernet49","switch"],["Ethernet2","tor_b_dfw1","Ethernet49","switch"],["Ethernet3","tor_c_dfw1","Ethernet49","switch"],["Ethernet4","tor_d_dfw1","Ethernet49","switch"],["Ethernet49","spine_a_dfw1","Ethernet1","switch"],["Ethernet50","spine_b_dfw1","Ethernet1","switch"]]},{"n":"leaf_b_dfw1","role":"leaf","layer":"Leaf","pod":1,"ip":"192.168.251.32","vtep":null,"lo":"10.0.1.32","nb":[["Ethernet1","tor_a_dfw1","Ethernet50","switch"],["Ethernet2","tor_b_dfw1","Ethernet50","switch"],["Ethernet3","tor_c_dfw1","Ethernet50","switch"],["Ethernet4","tor_d_dfw1","Ethernet50","switch"],["Ethernet49","spine_a_dfw1","Ethernet2","switch"],["Ethernet50","spine_b_dfw1","Ethernet2","switch"]]},{"n":"leaf_c_dfw1","role":"leaf","layer":"Leaf","pod":1,"ip":"192.168.251.33","vtep":null,"lo":"10.0.1.33","nb":[["Ethernet1","tor_a_dfw1","Ethernet51","switch"],["Ethernet2","tor_b_dfw1","Ethernet51","switch"],["Ethernet3","tor_c_dfw1","Ethernet51","switch"],["Ethernet4","tor_d_dfw1","Ethernet51","switch"],["Ethernet49","spine_a_dfw1","Ethernet3","switch"],["Ethernet50","spine_b_dfw1","Ethernet3","switch"]]},{"n":"leaf_d_dfw1","role":"leaf","layer":"Leaf","pod":2,"ip":"192.168.251.34","vtep":null,"lo":"10.0.1.34","nb":[["Ethernet1","tor_e_dfw1","Ethernet49","switch"],["Ethernet2","tor_f_dfw1","Ethernet49","switch"],["Ethernet3","tor_g_dfw1","Ethernet49","switch"],["Ethernet4","tor_h_dfw1","Ethernet49","switch"],["Ethernet49","spine_c_dfw1","Ethernet1","switch"],["Ethernet50","spine_d_dfw1","Ethernet1","switch"]]},{"n":"leaf_e_dfw1","role":"leaf","layer":"Leaf","pod":2,"ip":"192.168.251.35","vtep":null,"lo":"10.0.1.35","nb":[["Ethernet1","tor_e_dfw1","Ethernet50","switch"],["Ethernet2","tor_f_dfw1","Ethernet50","switch"],["Ethernet3","tor_g_dfw1","Ethernet50","switch"],["Ethernet4","tor_h_dfw1","Ethernet50","switch"],["Ethernet49","spine_c_dfw1","Ethernet2","switch"],["Ethernet50","spine_d_dfw1","Ethernet2","switch"]]},{"n":"leaf_f_dfw1","role":"leaf","layer":"Leaf","pod":2,"ip":"192.168.251.36","vtep":null,"lo":"10.0.1.36","nb":[["Ethernet1","tor_e_dfw1","Ethernet51","switch"],["Ethernet2","tor_f_dfw1","Ethernet51","switch"],["Ethernet3","tor_g_dfw1","Ethernet51","switch"],["Ethernet4","tor_h_dfw1","Ethernet51","switch"],["Ethernet49","spine_c_dfw1","Ethernet3","switch"],["Ethernet50","spine_d_dfw1","Ethernet3","switch"]]},{"n":"tor_a_dfw1","role":"tor","layer":"Top of Rack","pod":1,"ip":"192.168.251.41","vtep":"10.255.1.41","lo":null,"nb":[["Ethernet1","web-01","eth0","server"],["Ethernet49","leaf_a_dfw1","Ethernet1","switch"],["Ethernet50","leaf_b_dfw1","Ethernet1","switch"],["Ethernet51","leaf_c_dfw1","Ethernet1","switch"]]},{"n":"tor_b_dfw1","role":"tor","layer":"Top of Rack","pod":1,"ip":"192.168.251.42","vtep":"10.255.1.42","lo":null,"nb":[["Ethernet1","web-02","eth0","server"],["Ethernet2","lake-01","eth0","server"],["Ethernet49","leaf_a_dfw1","Ethernet2","switch"],["Ethernet50","leaf_b_dfw1","Ethernet2","switch"],["Ethernet51","leaf_c_dfw1","Ethernet2","switch"]]},{"n":"tor_c_dfw1","role":"tor","layer":"Top of Rack","pod":1,"ip":"192.168.251.43","vtep":"10.255.1.43","lo":null,"nb":[["Ethernet1","db-01","eth0","server"],["Ethernet49","leaf_a_dfw1","Ethernet3","switch"],["Ethernet50","leaf_b_dfw1","Ethernet3","switch"],["Ethernet51","leaf_c_dfw1","Ethernet3","switch"]]},{"n":"tor_d_dfw1","role":"tor","layer":"Top of Rack","pod":1,"ip":"192.168.251.44","vtep":"10.255.1.44","lo":null,"nb":[["Ethernet1","etl-01","eth0","server"],["Ethernet49","leaf_a_dfw1","Ethernet4","switch"],["Ethernet50","leaf_b_dfw1","Ethernet4","switch"],["Ethernet51","leaf_c_dfw1","Ethernet4","switch"]]},{"n":"tor_e_dfw1","role":"tor","layer":"Top of Rack","pod":2,"ip":"192.168.251.45","vtep":"10.255.1.45","lo":null,"nb":[["Ethernet1","web-03","eth0","server"],["Ethernet49","leaf_d_dfw1","Ethernet1","switch"],["Ethernet50","leaf_e_dfw1","Ethernet1","switch"],["Ethernet51","leaf_f_dfw1","Ethernet1","switch"]]},{"n":"tor_f_dfw1","role":"tor","layer":"Top of Rack","pod":2,"ip":"192.168.251.46","vtep":"10.255.1.46","lo":null,"nb":[["Ethernet1","db-02","eth0","server"],["Ethernet49","leaf_d_dfw1","Ethernet2","switch"],["Ethernet50","leaf_e_dfw1","Ethernet2","switch"],["Ethernet51","leaf_f_dfw1","Ethernet2","switch"]]},{"n":"tor_g_dfw1","role":"tor","layer":"Top of Rack","pod":2,"ip":"192.168.251.47","vtep":"10.255.1.47","lo":null,"nb":[["Ethernet1","backup-01","eth0","server"],["Ethernet2","lake-02","eth0","server"],["Ethernet49","leaf_d_dfw1","Ethernet3","switch"],["Ethernet50","leaf_e_dfw1","Ethernet3","switch"],["Ethernet51","leaf_f_dfw1","Ethernet3","switch"]]},{"n":"tor_h_dfw1","role":"tor","layer":"Top of Rack","pod":2,"ip":"192.168.251.48","vtep":"10.255.1.48","lo":null,"nb":[["Ethernet1","etl-02","eth0","server"],["Ethernet49","leaf_d_dfw1","Ethernet4","switch"],["Ethernet50","leaf_e_dfw1","Ethernet4","switch"],["Ethernet51","leaf_f_dfw1","Ethernet4","switch"]]}],"hosts":[{"n":"web-01","ip":"10.10.1.21","sw":"tor_a_dfw1","port":"Ethernet1","vlan":10,"vni":10010,"vrf":"PAYMENTS"},{"n":"web-02","ip":"10.10.1.22","sw":"tor_b_dfw1","port":"Ethernet1","vlan":10,"vni":10010,"vrf":"PAYMENTS"},{"n":"web-03","ip":"10.10.1.23","sw":"tor_e_dfw1","port":"Ethernet1","vlan":10,"vni":10010,"vrf":"PAYMENTS"},{"n":"db-01","ip":"10.10.2.45","sw":"tor_c_dfw1","port":"Ethernet1","vlan":20,"vni":10020,"vrf":"PAYMENTS"},{"n":"db-02","ip":"10.10.2.46","sw":"tor_f_dfw1","port":"Ethernet1","vlan":20,"vni":10020,"vrf":"PAYMENTS"},{"n":"backup-01","ip":"10.10.5.50","sw":"tor_g_dfw1","port":"Ethernet1","vlan":25,"vni":10025,"vrf":"PAYMENTS"},{"n":"etl-01","ip":"10.20.3.30","sw":"tor_d_dfw1","port":"Ethernet1","vlan":30,"vni":20030,"vrf":"ANALYTICS"},{"n":"etl-02","ip":"10.20.3.31","sw":"tor_h_dfw1","port":"Ethernet1","vlan":30,"vni":20030,"vrf":"ANALYTICS"},{"n":"lake-01","ip":"10.20.4.40","sw":"tor_b_dfw1","port":"Ethernet2","vlan":40,"vni":20040,"vrf":"ANALYTICS"},{"n":"lake-02","ip":"10.20.4.41","sw":"tor_g_dfw1","port":"Ethernet2","vlan":40,"vni":20040,"vrf":"ANALYTICS"}],"links":[["superspine_a_dfw1","edge_a_dfw1"],["superspine_a_dfw1","edge_b_dfw1"],["superspine_b_dfw1","edge_a_dfw1"],["superspine_b_dfw1","edge_b_dfw1"],["spine_a_dfw1","superspine_a_dfw1"],["spine_a_dfw1","superspine_b_dfw1"],["spine_b_dfw1","superspine_a_dfw1"],["spine_b_dfw1","superspine_b_dfw1"],["spine_c_dfw1","superspine_a_dfw1"],["spine_c_dfw1","superspine_b_dfw1"],["spine_d_dfw1","superspine_a_dfw1"],["spine_d_dfw1","superspine_b_dfw1"],["leaf_a_dfw1","spine_a_dfw1"],["leaf_a_dfw1","spine_b_dfw1"],["leaf_b_dfw1","spine_a_dfw1"],["leaf_b_dfw1","spine_b_dfw1"],["leaf_c_dfw1","spine_a_dfw1"],["leaf_c_dfw1","spine_b_dfw1"],["leaf_d_dfw1","spine_c_dfw1"],["leaf_d_dfw1","spine_d_dfw1"],["leaf_e_dfw1","spine_c_dfw1"],["leaf_e_dfw1","spine_d_dfw1"],["leaf_f_dfw1","spine_c_dfw1"],["leaf_f_dfw1","spine_d_dfw1"],["tor_a_dfw1","leaf_a_dfw1"],["tor_a_dfw1","leaf_b_dfw1"],["tor_a_dfw1","leaf_c_dfw1"],["tor_b_dfw1","leaf_a_dfw1"],["tor_b_dfw1","leaf_b_dfw1"],["tor_b_dfw1","leaf_c_dfw1"],["tor_c_dfw1","leaf_a_dfw1"],["tor_c_dfw1","leaf_b_dfw1"],["tor_c_dfw1","leaf_c_dfw1"],["tor_d_dfw1","leaf_a_dfw1"],["tor_d_dfw1","leaf_b_dfw1"],["tor_d_dfw1","leaf_c_dfw1"],["tor_e_dfw1","leaf_d_dfw1"],["tor_e_dfw1","leaf_e_dfw1"],["tor_e_dfw1","leaf_f_dfw1"],["tor_f_dfw1","leaf_d_dfw1"],["tor_f_dfw1","leaf_e_dfw1"],["tor_f_dfw1","leaf_f_dfw1"],["tor_g_dfw1","leaf_d_dfw1"],["tor_g_dfw1","leaf_e_dfw1"],["tor_g_dfw1","leaf_f_dfw1"],["tor_h_dfw1","leaf_d_dfw1"],["tor_h_dfw1","leaf_e_dfw1"],["tor_h_dfw1","leaf_f_dfw1"]],"scenarios":[{"id":"web-to-db","label":"Same pod, routed","about":"web-01 queries db-01. Both ToRs sit in pod 1, so the packet goes up to one leaf and straight back down. Routed in VRF PAYMENTS, so it rides L3 VNI 50010.","kind":"l3vni","vni":50010,"src":"web-01","dst":"db-01","via":["leaf_c_dfw1"],"hops":[{"dev":"tor_a_dfw1","ip":"192.168.251.41","inp":"Ethernet1","outp":"Ethernet51","in_if":1,"out_if":51,"len":914,"enc":false,"isrc":"10.10.1.21","idst":"10.10.2.45","isp":39474,"idp":5432,"ism":"52:54:00:b2:da:95","idm":"00:00:5e:00:01:01","ittl":64,"vlan":10},{"dev":"leaf_c_dfw1","ip":"192.168.251.33","inp":"Ethernet1","outp":"Ethernet3","in_if":1,"out_if":3,"len":964,"enc":true,"osm":"02:1c:73:9f:70:1c","odm":"02:1c:73:e2:08:b0","osrc":"10.255.1.41","odst":"10.255.1.43","ttl":255,"osport":50706,"vni":50010,"isrc":"10.10.1.21","idst":"10.10.2.45","isp":39474,"idp":5432,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:bb:97:a8","ittl":63},{"dev":"tor_c_dfw1","ip":"192.168.251.43","inp":"Ethernet51","outp":"Ethernet1","in_if":51,"out_if":1,"len":964,"enc":true,"osm":"02:1c:73:e2:08:b0","odm":"02:1c:73:bb:97:a8","osrc":"10.255.1.41","odst":"10.255.1.43","ttl":254,"osport":50706,"vni":50010,"isrc":"10.10.1.21","idst":"10.10.2.45","isp":39474,"idp":5432,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:bb:97:a8","ittl":63}],"proto":"tcp"},{"id":"db-replication","label":"Across pods, bridged","about":"db-01 replicates to db-02 in pod 2. Same VLAN, so it stays in L2 VNI 10020, but it has to climb all the way to a superspine to change pods.","kind":"l2vni","vni":10020,"src":"db-01","dst":"db-02","via":["leaf_c_dfw1","spine_a_dfw1","superspine_a_dfw1","spine_c_dfw1","leaf_e_dfw1"],"hops":[{"dev":"tor_c_dfw1","ip":"192.168.251.43","inp":"Ethernet1","outp":"Ethernet51","in_if":1,"out_if":51,"len":1464,"enc":false,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64,"vlan":20},{"dev":"leaf_c_dfw1","ip":"192.168.251.33","inp":"Ethernet3","outp":"Ethernet49","in_if":3,"out_if":49,"len":1514,"enc":true,"osm":"02:1c:73:bb:97:a8","odm":"02:1c:73:e2:08:b0","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":255,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64},{"dev":"spine_a_dfw1","ip":"192.168.251.21","inp":"Ethernet3","outp":"Ethernet49","in_if":3,"out_if":49,"len":1514,"enc":true,"osm":"02:1c:73:e2:08:b0","odm":"02:1c:73:48:76:45","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":254,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64},{"dev":"superspine_a_dfw1","ip":"192.168.251.11","inp":"Ethernet1","outp":"Ethernet3","in_if":1,"out_if":3,"len":1514,"enc":true,"osm":"02:1c:73:48:76:45","odm":"02:1c:73:f0:9c:fa","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":253,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64},{"dev":"spine_c_dfw1","ip":"192.168.251.23","inp":"Ethernet49","outp":"Ethernet2","in_if":49,"out_if":2,"len":1514,"enc":true,"osm":"02:1c:73:f0:9c:fa","odm":"02:1c:73:21:8a:7c","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":252,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64},{"dev":"leaf_e_dfw1","ip":"192.168.251.35","inp":"Ethernet49","outp":"Ethernet2","in_if":49,"out_if":2,"len":1514,"enc":true,"osm":"02:1c:73:21:8a:7c","odm":"02:1c:73:06:32:e2","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":251,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64},{"dev":"tor_f_dfw1","ip":"192.168.251.46","inp":"Ethernet50","outp":"Ethernet1","in_if":50,"out_if":1,"len":1514,"enc":true,"osm":"02:1c:73:06:32:e2","odm":"02:1c:73:33:8b:84","osrc":"10.255.1.43","odst":"10.255.1.46","ttl":250,"osport":55131,"vni":10020,"isrc":"10.10.2.45","idst":"10.10.2.46","isp":33212,"idp":5433,"ism":"52:54:00:c2:53:18","idm":"52:54:00:15:a1:51","ittl":64}],"proto":"tcp"},{"id":"backup-elephant","label":"Elephant (inject)","about":"The elephant inject: one 2.5 Gbps TCP session. One 5-tuple hashes to one leaf, one spine and one superspine, so exactly those links run hot.","kind":"l3vni","vni":50010,"src":"db-01","dst":"backup-01","via":["leaf_b_dfw1","spine_b_dfw1","superspine_b_dfw1","spine_d_dfw1","leaf_f_dfw1"],"hops":[{"dev":"tor_c_dfw1","ip":"192.168.251.43","inp":"Ethernet1","outp":"Ethernet50","in_if":1,"out_if":50,"len":1464,"enc":false,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"52:54:00:c2:53:18","idm":"00:00:5e:00:01:01","ittl":64,"vlan":20},{"dev":"leaf_b_dfw1","ip":"192.168.251.32","inp":"Ethernet3","outp":"Ethernet50","in_if":3,"out_if":50,"len":1514,"enc":true,"osm":"02:1c:73:bb:97:a8","odm":"02:1c:73:66:88:55","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":255,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"spine_b_dfw1","ip":"192.168.251.22","inp":"Ethernet2","outp":"Ethernet50","in_if":2,"out_if":50,"len":1514,"enc":true,"osm":"02:1c:73:66:88:55","odm":"02:1c:73:79:9d:cc","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":254,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"superspine_b_dfw1","ip":"192.168.251.12","inp":"Ethernet2","outp":"Ethernet4","in_if":2,"out_if":4,"len":1514,"enc":true,"osm":"02:1c:73:79:9d:cc","odm":"02:1c:73:f4:e1:7b","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":253,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"spine_d_dfw1","ip":"192.168.251.24","inp":"Ethernet50","outp":"Ethernet3","in_if":50,"out_if":3,"len":1514,"enc":true,"osm":"02:1c:73:f4:e1:7b","odm":"02:1c:73:03:12:bc","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":252,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"leaf_f_dfw1","ip":"192.168.251.36","inp":"Ethernet50","outp":"Ethernet3","in_if":50,"out_if":3,"len":1514,"enc":true,"osm":"02:1c:73:03:12:bc","odm":"02:1c:73:5b:1d:3a","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":251,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"tor_g_dfw1","ip":"192.168.251.47","inp":"Ethernet51","outp":"Ethernet1","in_if":51,"out_if":1,"len":1514,"enc":true,"osm":"02:1c:73:5b:1d:3a","odm":"02:1c:73:7e:fc:b4","osrc":"10.255.1.43","odst":"10.255.1.47","ttl":250,"osport":49908,"vni":50010,"isrc":"10.10.2.45","idst":"10.10.5.50","isp":51103,"idp":10566,"ism":"02:1c:73:bb:97:a8","idm":"02:1c:73:7e:fc:b4","ittl":63}],"proto":"tcp"},{"id":"internet-https","label":"Internet, via edge","about":"A customer on the internet reaches web-03. Traffic enters at an edge router, which is a border VTEP, and is encapsulated there, so every tier below sees the real client IP inside the tunnel.","kind":"l3vni","vni":50010,"src":"192.0.2.49","dst":"web-03","via":["superspine_a_dfw1","spine_c_dfw1","leaf_d_dfw1"],"hops":[{"dev":"edge_a_dfw1","ip":"192.168.251.1","inp":"Ethernet1","outp":"Ethernet49","in_if":1,"out_if":49,"len":1214,"enc":false,"isrc":"192.0.2.49","idst":"10.10.1.23","isp":35881,"idp":443,"ism":"00:1b:17:00:0f:01","idm":"00:00:5e:00:01:01","ittl":64,"vlan":0},{"dev":"superspine_a_dfw1","ip":"192.168.251.11","inp":"Ethernet49","outp":"Ethernet3","in_if":49,"out_if":3,"len":1264,"enc":true,"osm":"02:1c:73:ce:b5:77","odm":"02:1c:73:f0:9c:fa","osrc":"10.255.1.1","odst":"10.255.1.45","ttl":255,"osport":56460,"vni":50010,"isrc":"192.0.2.49","idst":"10.10.1.23","isp":35881,"idp":443,"ism":"02:1c:73:ce:b5:77","idm":"02:1c:73:0a:56:59","ittl":63},{"dev":"spine_c_dfw1","ip":"192.168.251.23","inp":"Ethernet49","outp":"Ethernet1","in_if":49,"out_if":1,"len":1264,"enc":true,"osm":"02:1c:73:f0:9c:fa","odm":"02:1c:73:21:8a:7c","osrc":"10.255.1.1","odst":"10.255.1.45","ttl":254,"osport":56460,"vni":50010,"isrc":"192.0.2.49","idst":"10.10.1.23","isp":35881,"idp":443,"ism":"02:1c:73:ce:b5:77","idm":"02:1c:73:0a:56:59","ittl":63},{"dev":"leaf_d_dfw1","ip":"192.168.251.34","inp":"Ethernet49","outp":"Ethernet1","in_if":49,"out_if":1,"len":1264,"enc":true,"osm":"02:1c:73:21:8a:7c","odm":"02:1c:73:b9:14:a3","osrc":"10.255.1.1","odst":"10.255.1.45","ttl":253,"osport":56460,"vni":50010,"isrc":"192.0.2.49","idst":"10.10.1.23","isp":35881,"idp":443,"ism":"02:1c:73:ce:b5:77","idm":"02:1c:73:0a:56:59","ittl":63},{"dev":"tor_e_dfw1","ip":"192.168.251.45","inp":"Ethernet49","outp":"Ethernet1","in_if":49,"out_if":1,"len":1264,"enc":true,"osm":"02:1c:73:b9:14:a3","odm":"02:1c:73:0a:56:59","osrc":"10.255.1.1","odst":"10.255.1.45","ttl":252,"osport":56460,"vni":50010,"isrc":"192.0.2.49","idst":"10.10.1.23","isp":35881,"idp":443,"ism":"02:1c:73:ce:b5:77","idm":"02:1c:73:0a:56:59","ittl":63}],"proto":"tcp"},{"id":"etl-to-lake","label":"ANALYTICS VRF","about":"etl-01 writes to the data lake in pod 2, routed in VRF ANALYTICS on L3 VNI 50020. Same fabric, different tenant, different VNI.","kind":"l3vni","vni":50020,"src":"etl-01","dst":"lake-02","via":["leaf_b_dfw1","spine_a_dfw1","superspine_a_dfw1","spine_c_dfw1","leaf_e_dfw1"],"hops":[{"dev":"tor_d_dfw1","ip":"192.168.251.44","inp":"Ethernet1","outp":"Ethernet50","in_if":1,"out_if":50,"len":1464,"enc":false,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"52:54:00:fd:b1:3a","idm":"00:00:5e:00:01:01","ittl":64,"vlan":30},{"dev":"leaf_b_dfw1","ip":"192.168.251.32","inp":"Ethernet4","outp":"Ethernet49","in_if":4,"out_if":49,"len":1514,"enc":true,"osm":"02:1c:73:ca:a6:79","odm":"02:1c:73:66:88:55","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":255,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"spine_a_dfw1","ip":"192.168.251.21","inp":"Ethernet2","outp":"Ethernet49","in_if":2,"out_if":49,"len":1514,"enc":true,"osm":"02:1c:73:66:88:55","odm":"02:1c:73:48:76:45","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":254,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"superspine_a_dfw1","ip":"192.168.251.11","inp":"Ethernet1","outp":"Ethernet3","in_if":1,"out_if":3,"len":1514,"enc":true,"osm":"02:1c:73:48:76:45","odm":"02:1c:73:f0:9c:fa","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":253,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"spine_c_dfw1","ip":"192.168.251.23","inp":"Ethernet49","outp":"Ethernet2","in_if":49,"out_if":2,"len":1514,"enc":true,"osm":"02:1c:73:f0:9c:fa","odm":"02:1c:73:21:8a:7c","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":252,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"leaf_e_dfw1","ip":"192.168.251.35","inp":"Ethernet49","outp":"Ethernet3","in_if":49,"out_if":3,"len":1514,"enc":true,"osm":"02:1c:73:21:8a:7c","odm":"02:1c:73:06:32:e2","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":251,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63},{"dev":"tor_g_dfw1","ip":"192.168.251.47","inp":"Ethernet50","outp":"Ethernet2","in_if":50,"out_if":2,"len":1514,"enc":true,"osm":"02:1c:73:06:32:e2","odm":"02:1c:73:7e:fc:b4","osrc":"10.255.1.44","odst":"10.255.1.47","ttl":250,"osport":61788,"vni":50020,"isrc":"10.20.3.30","idst":"10.20.4.41","isp":50709,"idp":8020,"ism":"02:1c:73:ca:a6:79","idm":"02:1c:73:7e:fc:b4","ittl":63}],"proto":"tcp"},{"id":"cross-vrf-attempt","label":"Dropped at ToR","about":"A PAYMENTS app tries to reach ANALYTICS Kafka. There is no route between the VRFs, so tor_a drops it. One sample, from one switch, with no VNI.","kind":"dropped","vni":0,"src":"web-01","dst":"etl-01","via":[],"hops":[{"dev":"tor_a_dfw1","ip":"192.168.251.41","inp":"Ethernet1","outp":"drop","in_if":1,"out_if":0,"len":74,"enc":false,"isrc":"10.10.1.21","idst":"10.20.3.30","isp":39371,"idp":9092,"ism":"52:54:00:b2:da:95","idm":"00:00:5e:00:01:01","ittl":64,"vlan":10}],"proto":"tcp"},{"id":"vrf-leak","label":"VRF leak (inject)","about":"The leak inject: someone leaked routes between VRFs. Now web-01 reaches etl-02, and the packet carries ANALYTICS' L3 VNI 50020 across the fabric.","kind":"l3vni","vni":50020,"src":"web-01","dst":"etl-02","via":["leaf_a_dfw1","spine_a_dfw1","superspine_a_dfw1","spine_c_dfw1","leaf_d_dfw1"],"hops":[{"dev":"tor_a_dfw1","ip":"192.168.251.41","inp":"Ethernet1","outp":"Ethernet49","in_if":1,"out_if":49,"len":1014,"enc":false,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"52:54:00:b2:da:95","idm":"00:00:5e:00:01:01","ittl":64,"vlan":10},{"dev":"leaf_a_dfw1","ip":"192.168.251.31","inp":"Ethernet1","outp":"Ethernet49","in_if":1,"out_if":49,"len":1064,"enc":true,"osm":"02:1c:73:9f:70:1c","odm":"02:1c:73:d9:8f:80","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":255,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63},{"dev":"spine_a_dfw1","ip":"192.168.251.21","inp":"Ethernet1","outp":"Ethernet49","in_if":1,"out_if":49,"len":1064,"enc":true,"osm":"02:1c:73:d9:8f:80","odm":"02:1c:73:48:76:45","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":254,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63},{"dev":"superspine_a_dfw1","ip":"192.168.251.11","inp":"Ethernet1","outp":"Ethernet3","in_if":1,"out_if":3,"len":1064,"enc":true,"osm":"02:1c:73:48:76:45","odm":"02:1c:73:f0:9c:fa","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":253,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63},{"dev":"spine_c_dfw1","ip":"192.168.251.23","inp":"Ethernet49","outp":"Ethernet1","in_if":49,"out_if":1,"len":1064,"enc":true,"osm":"02:1c:73:f0:9c:fa","odm":"02:1c:73:21:8a:7c","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":252,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63},{"dev":"leaf_d_dfw1","ip":"192.168.251.34","inp":"Ethernet49","outp":"Ethernet4","in_if":49,"out_if":4,"len":1064,"enc":true,"osm":"02:1c:73:21:8a:7c","odm":"02:1c:73:b9:14:a3","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":251,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63},{"dev":"tor_h_dfw1","ip":"192.168.251.48","inp":"Ethernet49","outp":"Ethernet1","in_if":49,"out_if":1,"len":1064,"enc":true,"osm":"02:1c:73:b9:14:a3","odm":"02:1c:73:a9:fb:cf","osrc":"10.255.1.41","odst":"10.255.1.48","ttl":250,"osport":55743,"vni":50020,"isrc":"10.10.1.21","idst":"10.20.3.31","isp":37430,"idp":9092,"ism":"02:1c:73:9f:70:1c","idm":"02:1c:73:a9:fb:cf","ittl":63}],"proto":"tcp"}]};
+const $ = id => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const short = n => n.replace(/_dfw1$/, "");
+const D = Object.fromEntries(DATA.devices.map(d => [d.n, d]));
+
+// Layout: one band per Kentik layer, pod 1 on the left, pod 2 on the right.
+const Y = {edge: 92, superspine: 196, spine: 304, leaf: 412, tor: 520};
+const BANDS = [["EDGE", 40, 144], ["SUPERSPINE", 144, 250], ["SPINE", 250, 358], ["LEAF", 358, 466], ["TOP OF RACK", 466, 700]];
+const X = {
+  edge_a: 520, edge_b: 680, superspine_a: 520, superspine_b: 680,
+  spine_a: 300, spine_b: 440, spine_c: 760, spine_d: 900,
+  leaf_a: 230, leaf_b: 370, leaf_c: 510, leaf_d: 690, leaf_e: 830, leaf_f: 970,
+  tor_a: 150, tor_b: 280, tor_c: 410, tor_d: 540, tor_e: 660, tor_f: 790, tor_g: 920, tor_h: 1050,
+};
+const pos = n => [X[short(n)], Y[D[n].role]];
+const W = 122, H = 32;
+const hostPos = {};
+{
+  const per = {};
+  DATA.hosts.forEach(h => { per[h.sw] = (per[h.sw] || 0) + 1; const k = per[h.sw]; const [x] = pos(h.sw);
+    hostPos[h.n] = [x, 600 + (k - 1) * 40]; });
+}
+const FW = [600, 22];
+
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+const linkEls = {};
+function key(a, b) { return [a, b].sort().join("|"); }
+
+function build() {
+  const svg = $("map");
+  BANDS.forEach(([lab, y0, y1], i) => {
+    el("rect", {x: 0, y: y0, width: 1200, height: y1 - y0, class: "band" + (i % 2 ? " alt" : "")}, svg);
+    el("text", {x: 12, y: y0 + 18, class: "blab"}, svg, lab);
+  });
+  el("rect", {x: 90, y: 270, width: 495, height: 425, rx: 10, class: "pod"}, svg);
+  el("rect", {x: 600, y: 270, width: 515, height: 425, rx: 10, class: "pod"}, svg);
+  el("text", {x: 100, y: 286, class: "podlab"}, svg, "POD 1");
+  el("text", {x: 1105, y: 286, class: "podlab", "text-anchor": "end"}, svg, "POD 2");
+  const lg = el("g", {}, svg);
+  DATA.links.forEach(([a, b]) => {
+    const [x1, y1] = pos(a), [x2, y2] = pos(b);
+    linkEls[key(a, b)] = el("line", {x1, y1, x2, y2, class: "ln"}, lg);
+  });
+  DATA.hosts.forEach(h => {
+    const [x1, y1] = pos(h.sw), [x2, y2] = hostPos[h.n];
+    linkEls[key(h.sw, h.n)] = el("line", {x1, y1, x2, y2: y2 - 12, class: "ln acc"}, lg);
+  });
+  ["edge_a_dfw1", "edge_b_dfw1"].forEach(e => {
+    const [x, y] = pos(e);
+    linkEls[key(e, "ext")] = el("line", {x1: FW[0], y1: FW[1] + 12, x2: x, y2: y, class: "ln ext"}, lg);
+  });
+  const fw = el("g", {class: "ext"}, svg);
+  el("rect", {x: FW[0] - 120, y: FW[1] - 12, width: 240, height: 26, rx: 5}, fw);
+  el("text", {x: FW[0], y: FW[1] + 5, "text-anchor": "middle"}, fw, "internet · branch → fw-edge");
+  DATA.devices.forEach(d => {
+    const [x, y] = pos(d.n);
+    const g = el("g", {class: "nd" + (d.vtep ? " vtep" : ""), tabindex: 0, role: "button", "aria-label": d.n, id: "n-" + d.n}, svg);
+    el("rect", {x: x - W / 2, y: y - H / 2, width: W, height: H, rx: 6}, g);
+    el("text", {x, y: y - 1, "text-anchor": "middle"}, g, short(d.n));
+    el("text", {x, y: y + 11, "text-anchor": "middle", class: "sub"}, g, d.ip + (d.vtep ? " · VTEP" : ""));
+    g.addEventListener("click", () => inspect(d.n));
+    g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); inspect(d.n); } });
+  });
+  DATA.hosts.forEach(h => {
+    const [x, y] = hostPos[h.n];
+    const g = el("g", {class: "hs " + h.vrf, id: "h-" + h.n}, svg);
+    el("rect", {x: x - 46, y: y - 12, width: 92, height: 26, rx: 13}, g);
+    el("text", {x, y: y + 5, "text-anchor": "middle"}, g, h.n);
+  });
+}
+
+let scen = null, curHop = null;
+
+function stackFor(h) {
+  const rows = [];
+  if (h.enc) {
+    rows.push(["L-o", "Outer", `${h.osrc} → ${h.odst} · UDP ${h.osport} → 4789 · TTL ${h.ttl}`]);
+    rows.push(["L-o", "MACs", `${h.osm} → ${h.odm}`]);
+    rows.push(["L-v", "VXLAN", `VNI ${h.vni}`]);
+  }
+  rows.push(["L-i", h.enc ? "Inner" : "Packet", `${h.isrc}:${h.isp} → ${h.idst}:${h.idp} TCP · TTL ${h.ittl}`]);
+  if (!h.enc && h.vlan) rows.push(["L-i", "VLAN", `${h.vlan} (sFlow extended switch data)`]);
+  if (h.outp === "drop") rows.push(["L-d", "Output", "none: no route in this VRF, dropped"]);
+  return `<ul class="stack">${rows.map(([c, a, b]) => `<li class="${c}"><span>${a}</span><span>${b}</span></li>`).join("")}</ul>`;
+}
+
+function select(id) {
+  scen = DATA.scenarios.find(s => s.id === id);
+  document.querySelectorAll("#seg button").forEach(b => b.setAttribute("aria-checked", b.dataset.id === id));
+  Object.values(linkEls).forEach(l => l.classList.remove("live", "plain", "dead"));
+  document.querySelectorAll(".nd,.hs").forEach(n => n.classList.remove("on", "cur", "drop"));
+  const svg = $("map");
+  svg.querySelectorAll(".tick").forEach(t => t.remove());
+  const devs = scen.hops.map(h => h.dev);
+  const srcHost = DATA.hosts.find(h => h.n === scen.src);
+  const dropped = scen.kind === "dropped";
+  const chain = [srcHost ? srcHost.n : "ext", ...devs];
+  if (!dropped) chain.push(scen.dst);
+  for (let i = 0; i + 1 < chain.length; i++) {
+    const l = linkEls[key(chain[i], chain[i + 1])];
+    if (!l) continue;
+    l.classList.add("live");
+    // The first link (host or firewall into the source VTEP) carries the original packet.
+    if (i === 0) l.classList.add("plain");
+  }
+  devs.forEach((d, i) => {
+    const n = $("n-" + d); n.classList.add(dropped ? "drop" : "on");
+    const [x, y] = pos(d);
+    el("text", {x: x + W / 2 + 4, y: y - H / 2 + 4, class: "tick"}, svg, String(i + 1));
+  });
+  [scen.src, scen.dst].forEach(h => { const n = $("h-" + h); if (n) n.classList.add("on"); });
+  $("about").textContent = scen.about;
+  const chips = [`${scen.hops.length} switch${scen.hops.length > 1 ? "es" : ""} sample it`];
+  let html = chips.map(c => `<span class="chip">${c}</span>`).join("");
+  html += dropped ? `<span class="chip drop">dropped at ${short(devs[0])}</span>`
+    : `<span class="chip vni">${scen.kind === "l2vni" ? "L2" : "L3"} VNI ${scen.vni}</span><span class="chip">via ${scen.via.map(short).join(" › ")}</span>`;
+  $("chips").innerHTML = html;
+  $("hops").innerHTML = scen.hops.map((h, i) => {
+    const d = D[h.dev];
+    const what = i === 0 ? (dropped ? "source, drops it" : "source VTEP") : (d.vtep && i === scen.hops.length - 1 ? "destination VTEP" : d.layer);
+    return `<button type="button" class="hop" data-i="${i}" aria-pressed="false">
+      <div class="hh"><span class="hn">${i + 1} · ${short(h.dev)}</span><span class="ht">${what}</span></div>
+      <div class="meta">sFlow from ${h.ip} · in ${h.inp} (ifIndex ${h.in_if}) → out ${h.outp === "drop" ? "—" : h.outp + " (" + h.out_if + ")"} · ${h.len} B frame</div>
+      ${stackFor(h)}</button>`;
+  }).join("");
+  $("hops").querySelectorAll(".hop").forEach(b => b.addEventListener("click", () => focusHop(+b.dataset.i)));
+  focusHop(0, true);
+}
+
+function focusHop(i, quiet) {
+  curHop = i;
+  document.querySelectorAll(".nd").forEach(n => n.classList.remove("cur"));
+  $("hops").querySelectorAll(".hop").forEach(b => b.setAttribute("aria-pressed", +b.dataset.i === i));
+  const d = scen.hops[i].dev;
+  $("n-" + d).classList.add("cur");
+  inspect(d);
+}
+
+function inspect(n) {
+  const d = D[n];
+  document.querySelectorAll(".nd").forEach(x => x.classList.remove("sel"));
+  $("n-" + n).classList.add("sel");
+  $("i-title").textContent = n;
+  const rows = [["Role", d.role], ["Kentik layer", d.layer], ["Pod", d.pod || "spans both"],
+    ["Sending / SNMP IP", d.ip], ["VTEP", d.vtep || "no (transit only)"], ["Loopback", d.lo || d.vtep || "—"],
+    ["sysName", n], ["LLDP neighbors", d.nb.length]];
+  $("i-kv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("i-nb").innerHTML = d.nb.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join("");
+}
+
+function layers() {
+  const by = {};
+  DATA.devices.forEach(d => (by[d.layer] = by[d.layer] || []).push(short(d.n)));
+  $("layers").innerHTML = Object.entries(by).map(([l, ns]) => `<tr><td>${l}</td><td>${ns.join(", ")}</td></tr>`).join("");
+}
+
+build();
+$("seg").innerHTML = DATA.scenarios.map(s =>
+  `<button type="button" role="radio" aria-checked="false" data-id="${s.id}"><b>${s.label}</b><span>${s.src} → ${s.dst}</span></button>`).join("");
+$("seg").querySelectorAll("button").forEach(b => b.addEventListener("click", () => select(b.dataset.id)));
+layers();
+select("db-replication");
+</script>
+</body>
+</html>

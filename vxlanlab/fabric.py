@@ -5,9 +5,13 @@ sample can be taken (device, input and output interface) and the exact packet
 header a sample there would contain. Ingress sampling is modeled, which is the
 default on most data center switches.
 
-  src leaf, host-facing port   inner packet only (no VXLAN yet)
-  spine, port facing src leaf  outer VTEP headers + VXLAN + inner packet
-  dst leaf, uplink port        outer VTEP headers + VXLAN + inner packet
+  src VTEP, host-facing port       inner packet only (no VXLAN yet)
+  each transit switch (spine, ...) outer VTEP headers + VXLAN + inner packet
+  dst VTEP, uplink port            outer VTEP headers + VXLAN + inner packet
+
+Any Clos works: 3-stage leaf-spine, or 5-stage with leaves, spines and
+superspines between the VTEPs. Packets take a shortest path, and where there
+are several equal next hops, the inner 5-tuple hash picks one, like ECMP.
 """
 from __future__ import annotations
 
@@ -15,11 +19,26 @@ import ipaddress
 import json
 import os
 import random
+import zlib
+from collections import deque
 from typing import Dict, List, Optional
 
 from . import packets as pk
 
 DEFAULT_TOPOLOGY = os.path.join(os.path.dirname(__file__), "topology.json")
+
+# Built-in topologies, selectable by name with --topology or VXLANLAB_TOPOLOGY.
+TOPOLOGIES = {
+    "3tier": DEFAULT_TOPOLOGY,
+    "5stage": os.path.join(os.path.dirname(__file__), "topology-5stage.json"),
+}
+
+
+def topology_path(ref: Optional[str]) -> str:
+    """'5stage' -> the built-in file; anything else is a path. None -> the default."""
+    if not ref:
+        return DEFAULT_TOPOLOGY
+    return TOPOLOGIES.get(ref, ref)
 
 
 def ifindex(name: str) -> int:
@@ -43,7 +62,11 @@ class Device:
         self.uplinks = d.get("uplinks", {})        # spine name -> local port
         self.downlinks = d.get("downlinks", {})    # leaf name -> local port
         self.edge_ports = d.get("edge_ports", {})  # vrf -> local port
+        self.pod = d.get("pod")
         self.mac = fake_mac(self.name)              # router / system MAC
+
+    def port_to(self, peer: str) -> str:
+        return self.uplinks.get(peer) or self.downlinks[peer]
 
 
 class Endpoint:
@@ -73,13 +96,16 @@ class Path:
 
     def __init__(self, kind: str, hops: List[Hop], vni: int = 0, spine: Optional[str] = None,
                  vtep_src: Optional[str] = None, vtep_dst: Optional[str] = None,
-                 outer_sport: int = 0):
+                 outer_sport: int = 0, via: Optional[List[str]] = None):
         self.kind, self.hops, self.vni, self.spine = kind, hops, vni, spine
         self.vtep_src, self.vtep_dst, self.outer_sport = vtep_src, vtep_dst, outer_sport
+        self.via = via or []   # transit switches between the VTEPs, in order
 
 
 class Fabric:
     def __init__(self, path: str = DEFAULT_TOPOLOGY, header_bytes: Optional[int] = None):
+        path = topology_path(path)
+        self.path_file = path
         with open(path) as f:
             self.cfg = json.load(f)
         c = self.cfg
@@ -88,14 +114,19 @@ class Fabric:
         self.fw_mac = c.get("firewall_mac", "00:1b:17:00:0f:01")
         self.vrfs = c["vrfs"]
         self.devices: Dict[str, Device] = {d["name"]: Device(d) for d in c["devices"]}
+        self.name = c.get("name", os.path.splitext(os.path.basename(path))[0])
         self.spines = [d for d in self.devices.values() if d.role == "spine"]
-        self.border = next((d for d in self.devices.values() if d.role == "border"), None)
+        # Border VTEPs: the switches with ports to the firewall. Outside traffic enters there.
+        self.borders = [d for d in self.devices.values() if d.edge_ports]
+        self.border = self.borders[0] if self.borders else None
+        self._dist = self._distances()
         self.segments = {s["vlan"]: s for s in c["segments"]}
         self.hosts: Dict[str, Endpoint] = {}
         for h in c["hosts"]:
             seg = self.segments[h["vlan"]]
             self.hosts[h["name"]] = Endpoint(h["name"], h["ip"], fake_mac(h["name"], "52:54:00"),
-                                             seg["vrf"], h["leaf"], h["port"], h["vlan"], seg["vni"])
+                                             seg["vrf"], h.get("switch") or h["leaf"], h["port"],
+                                             h["vlan"], seg["vni"])
         self.external = c.get("external", {})
 
     # ------------------------------------------------------------ endpoints
@@ -111,9 +142,13 @@ class Fabric:
         else:
             picked = [r.choice(addrs) for _ in range(count)]
         vrf = ext["vrf"]
-        port = self.border.edge_ports[vrf]
-        return [Endpoint("%s-%s" % (kind, ip), ip, self.fw_mac, vrf, self.border.name, port,
-                         external=True) for ip in picked]
+        # With more than one border VTEP, clients split across them, like two edge routers.
+        out = []
+        for i, ip in enumerate(picked):
+            b = self.borders[i % len(self.borders)]
+            out.append(Endpoint("%s-%s" % (kind, ip), ip, self.fw_mac, vrf, b.name,
+                                b.edge_ports[vrf], external=True))
+        return out
 
     def resolve(self, ref: str, seed: str) -> List[Endpoint]:
         """'web-01' -> [host]; 'internet:300' -> 300 outside clients."""
@@ -126,11 +161,43 @@ class Fabric:
 
     # ------------------------------------------------------------ paths
 
-    def _uplink_port(self, leaf: str, spine: str) -> str:
-        return self.devices[leaf].uplinks[spine]
+    def _neighbors(self, name: str) -> List[str]:
+        d = self.devices[name]
+        return list(d.uplinks) + list(d.downlinks)
 
-    def _downlink_port(self, spine: str, leaf: str) -> str:
-        return self.devices[spine].downlinks[leaf]
+    def _distances(self) -> Dict[str, Dict[str, int]]:
+        """Switch hops between every pair of switches (BFS over fabric links)."""
+        out = {}
+        for start in self.devices:
+            dist = {start: 0}
+            q = deque([start])
+            while q:
+                cur = q.popleft()
+                for n in self._neighbors(cur):
+                    if n not in dist:
+                        dist[n] = dist[cur] + 1
+                        q.append(n)
+            out[start] = dist
+        return out
+
+    def route(self, src: str, dst: str, h: int) -> List[str]:
+        """The switches a flow with 5-tuple hash h crosses from src to dst, ends included.
+
+        At each switch, every neighbor one hop closer to dst is an equal-cost next
+        hop, and the hash picks one. The first choice uses the same bits the
+        3-stage lab always used, so its paths don't move; later stages mix in the
+        stage number, so one flow doesn't always pick "the first" at every tier.
+        """
+        hops = [src]
+        stage = 0
+        while hops[-1] != dst:
+            cur = hops[-1]
+            need = self._dist[cur][dst] - 1
+            cands = [n for n in self._neighbors(cur) if self._dist[n].get(dst) == need]
+            x = (h >> 16) if stage == 0 else zlib.crc32(b"%d/%d" % (h, stage))
+            hops.append(cands[x % len(cands)])
+            stage += 1
+        return hops
 
     def path(self, src: Endpoint, dst: Endpoint, proto: str, sport: int, dport: int,
              ip_len: int, leak: bool = False) -> Path:
@@ -161,14 +228,15 @@ class Fabric:
         if src.leaf == dst.leaf:
             return Path("local", [access_hop(ifindex(dst.port), dst.vlan)])
 
-        # Crosses the fabric: pick a spine by hashing the inner 5-tuple, like ECMP does.
+        # Crosses the fabric: the inner 5-tuple hash picks among equal-cost paths, like ECMP.
         h = pk.ecmp_hash(src.ip, dst.ip, proto, sport, dport)
-        spine = self.spines[(h >> 16) % len(self.spines)]
         outer_sport = pk.vxlan_source_port(h)
         # Routed traffic carries the L3 VNI of the VRF the destination lives in. Without
         # leaking that's the same VRF as the source; with leaking it's the other one.
         vni = src.vni if same_segment else self.vrfs[dst.vrf]["l3vni"]
         dst_dev = self.devices[dst.leaf]
+        route = self.route(src_dev.name, dst_dev.name, h)
+        via = route[1:-1]
 
         if routed:
             inner_src_mac, inner_dst_mac = src_dev.mac, dst_dev.mac
@@ -184,18 +252,20 @@ class Fabric:
                                  src_dev.vtep, dst_dev.vtep, vni, outer_sport, ttl=ttl)
             return pk.pad_header(hdr, encap_frame_len, hb)
 
-        up = ifindex(self._uplink_port(src_dev.name, spine.name))
-        hops = [
-            access_hop(up),
-            Hop(spine.name, ifindex(self._downlink_port(spine.name, src_dev.name)),
-                ifindex(self._downlink_port(spine.name, dst_dev.name)),
-                encap(src_dev.mac, spine.mac, 255), encap_frame_len + 4),
-            Hop(dst_dev.name, ifindex(self._uplink_port(dst_dev.name, spine.name)),
-                ifindex(dst.port), encap(spine.mac, dst_dev.mac, 254), encap_frame_len + 4,
-                0, dst.vlan),
-        ]
-        return Path("l3vni" if routed else "l2vni", hops, vni, spine.name,
-                    src_dev.vtep, dst_dev.vtep, outer_sport)
+        hops = [access_hop(ifindex(src_dev.port_to(route[1])))]
+        # Every switch after the source VTEP samples the encapsulated packet as it
+        # arrives: outer MACs rewritten per hop, outer TTL down by one each time.
+        for i in range(1, len(route)):
+            dev = self.devices[route[i]]
+            prev = self.devices[route[i - 1]]
+            in_if = ifindex(dev.port_to(prev.name))
+            last = i == len(route) - 1
+            out_if = ifindex(dst.port) if last else ifindex(dev.port_to(route[i + 1]))
+            hops.append(Hop(dev.name, in_if, out_if, encap(prev.mac, dev.mac, 256 - i),
+                            encap_frame_len + 4, 0, dst.vlan if last else 0))
+        spine = next((n for n in via if self.devices[n].role == "spine"), via[0] if via else None)
+        return Path("l3vni" if routed else "l2vni", hops, vni, spine,
+                    src_dev.vtep, dst_dev.vtep, outer_sport, via)
 
     # ------------------------------------------------------------ interfaces
 

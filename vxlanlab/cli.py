@@ -17,7 +17,7 @@ from typing import Dict, List
 from . import __version__, kentik, sflow
 from .snmp import SnmpServer
 from .engine import Engine, Exporter
-from .fabric import DEFAULT_TOPOLOGY, Fabric
+from .fabric import TOPOLOGIES, Fabric
 
 PROTO_NAME = {1: "icmp", 6: "tcp", 17: "udp"}
 
@@ -86,7 +86,7 @@ def _print_status(engine: Engine) -> None:
     on = [n for n, v in engine.active.items() if v] or ["none"]
     print("Injects on: %s" % ", ".join(on))
     for e in engine.exporters.values():
-        print("  %-12s %-15s datagrams=%-8d samples=%d" % (e.name, e.agent_ip,
+        print("  %-17s %-15s datagrams=%-8d samples=%d" % (e.name, e.agent_ip,
                                                           e.sent_datagrams, e.sent_samples))
 
 
@@ -123,11 +123,11 @@ def cmd_run(args) -> int:
             _snmp_bind_error(e, args.snmp_port)
             return 1
 
-    print("vxlanlab %s: %d exporters -> %s:%d, sampling 1:%d, scale %.2fx, source mode %s"
-          % (__version__, len(engine.exporters), args.collector, args.port, engine.sample_rate,
+    print("vxlanlab %s (%s topology): %d exporters -> %s:%d, sampling 1:%d, scale %.2fx, source mode %s"
+          % (__version__, fabric.name, len(engine.exporters), args.collector, args.port, engine.sample_rate,
              args.scale, args.source_mode))
     for e in engine.exporters.values():
-        print("  %-12s agent IP %s" % (e.name, e.agent_ip))
+        print("  %-17s agent IP %s" % (e.name, e.agent_ip))
     on = [n for n, v in engine.active.items() if v]
     if on:
         print("Injects on: " + ", ".join(on))
@@ -201,11 +201,11 @@ def cmd_snmp(args) -> int:
     if args.show:
         nbrs = fabric.lldp_neighbors()
         ifs = fabric.interfaces()
-        print("%-12s %-12s %-16s %-12s %s" % ("Device", "Local port", "Neighbor", "Remote port",
+        print("%-17s %-12s %-17s %-12s %s" % ("Device", "Local port", "Neighbor", "Remote port",
                                              "Kind"))
         for dev, ports in nbrs.items():
             for idx, n in sorted(ports.items()):
-                print("%-12s %-12s %-16s %-12s %s" % (dev, ifs[dev][idx]["name"], n["sys_name"],
+                print("%-17s %-12s %-17s %-12s %s" % (dev, ifs[dev][idx]["name"], n["sys_name"],
                                                      n["port"], n["kind"]))
         return 0
     try:
@@ -218,7 +218,7 @@ def cmd_snmp(args) -> int:
           % (__version__, community))
     print("run the fabric with `run --snmp` instead to serve live counters.")
     for name, addr in server.addresses.items():
-        print("  %-12s %s" % (name, addr))
+        print("  %-17s %s" % (name, addr))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -239,13 +239,16 @@ def cmd_devices(args) -> int:
             print("%s,%s,%s,sFlow,%d,%s,%s" % (d.name, d.role, d.mgmt_ip, rate,
                                                d.vtep or "", d.loopback or ""))
         return 0
+    print("Topology %s: %d switches." % (fabric.name, len(fabric.devices)))
     print("Add each of these as a device in Kentik (flow type sFlow), attached to your")
     print("Universal Agent, with the sending IP shown. Sample rate: 1:%d.\n" % rate)
-    print("%-12s %-7s %-16s %-13s %s" % ("Device", "Role", "Sending IP", "VTEP", "Interfaces"))
+    w = max(12, max(len(n) for n in fabric.devices))
+    rw = max(7, max(len(d.role) for d in fabric.devices.values()))
+    print("%-*s %-*s %-16s %-13s %s" % (w, "Device", rw, "Role", "Sending IP", "VTEP", "Interfaces"))
     ifs = fabric.interfaces()
     for d in fabric.devices.values():
         ports = ", ".join("%s=%s" % (v["name"], v["desc"]) for _, v in sorted(ifs[d.name].items()))
-        print("%-12s %-7s %-16s %-13s %s" % (d.name, d.role, d.mgmt_ip, d.vtep or "-", ports))
+        print("%-*s %-*s %-16s %-13s %s" % (w, d.name, rw, d.role, d.mgmt_ip, d.vtep or "-", ports))
     return 0
 
 
@@ -293,16 +296,18 @@ def cmd_kentik_onboard(args) -> int:
               "ICMP only, no SNMP.\nCreate an SNMP v2c credential (community public) in Kentik's credential "
               "vault and pass its name.", file=sys.stderr)
 
+    layers = kentik.layers_for(fabric)
     if args.dry_run:
+        print("# Topology %s: %d switch(es)" % (fabric.name, len(devices)))
         if args.site_name:
             print("# Site %r: used if it exists, else POST %s%s" % (args.site_name, args.api_url, kentik.SITE_PATH))
-            print(json.dumps({"site": kentik.new_site(args.site_name)}, indent=2))
+            print(json.dumps({"site": kentik.new_site(args.site_name, layers)}, indent=2))
             print("# Every device below then gets that site's id as siteId")
         if (args.site_name or args.site_id) and not args.no_layers:
             print("# After the devices exist, the site's layers get their ids: "
                   + "; ".join("%s = %s" % (layer, ", ".join(d.name for d in fabric.devices.values()
                                                              if d.role in roles and (not only or d.name in only)))
-                              for layer, roles in kentik.LAYERS))
+                              for layer, roles in layers))
         print("# POST %s%s/batch_create" % (args.api_url, kentik.DEVICE_PATH))
         print("# (devices Kentik already has go to PUT .../batch_update with their \"id\" instead)")
         print(json.dumps({"devices": devices}, indent=2))
@@ -312,7 +317,7 @@ def cmd_kentik_onboard(args) -> int:
     failures = {}   # device name -> why
     try:
         if args.site_name:
-            site = _find_or_create_site(client, args.site_name, args)
+            site = _find_or_create_site(client, args.site_name, layers, args)
             args.site_id = int(site["id"])
             for d in devices:
                 d["siteId"] = args.site_id
@@ -350,8 +355,9 @@ def cmd_kentik_onboard(args) -> int:
             print("If the reason is the device name, re-run with --underscores (leaf_01 instead of leaf-01).",
                   file=sys.stderr)
         return 1
-    print("Verified: all %d device(s) are in Kentik. Flow from 192.168.250.x will land on them "
-          "once the lab is running." % len(devices))
+    nets = sorted({d.mgmt_ip.rsplit(".", 1)[0] + ".x" for d in fabric.devices.values()})
+    print("Verified: all %d device(s) are in Kentik. Flow from %s will land on them "
+          "once the lab is running." % (len(devices), ", ".join(nets)))
     if args.site_id and not args.no_layers:
         try:
             _place_in_layers(client, fabric, have, args)
@@ -361,16 +367,16 @@ def cmd_kentik_onboard(args) -> int:
     return 0
 
 
-def _find_or_create_site(client, title: str, args) -> dict:
+def _find_or_create_site(client, title: str, layers, args) -> dict:
     for site in client.sites():
         if site.get("title") == title:
             print("Using site %r (id %s)" % (title, site.get("id")))
             return site
-    site = client.create_site(kentik.new_site(title))
+    site = client.create_site(kentik.new_site(title, layers))
     _show_raw(args, "create site", site)
     if not site.get("id"):
         raise kentik.KentikError("creating site %r returned no id" % title)
-    print("Created site %r (id %s) with layers %s" % (title, site["id"], ", ".join(n for n, _ in kentik.LAYERS)))
+    print("Created site %r (id %s) with layers %s" % (title, site["id"], ", ".join(n for n, _ in layers)))
     return site
 
 
@@ -383,8 +389,8 @@ def _place_in_layers(client, fabric, ids, args) -> None:
     _show_raw(args, "update site", resp)
     names = {v: k for k, v in ids.items()}
     for layer, dev_ids in assign.items():
-        print("  layer %-7s %s" % (layer, ", ".join(names[i] for i in dev_ids) or "-"))
-    print("Site %r layers set, so the site map draws Border, Spine and Leaf tiers." % site.get("title"))
+        print("  layer %-11s %s" % (layer, ", ".join(names[i] for i in dev_ids) or "-"))
+    print("Site %r layers set, so the site map draws %s tiers." % (site.get("title"), ", ".join(assign)))
 
 
 def _show_raw(args, call: str, resp) -> None:
@@ -415,8 +421,8 @@ def cmd_paths(args) -> int:
     for name, cs in engine.injects.items():
         convs.extend(cs)
     seen = set()
-    print("%-26s %-22s %-22s %-8s %-6s %-9s %s" % ("Flow", "Inner src", "Inner dst", "Path",
-                                                  "VNI", "Spine", "Outer (VTEP) header"))
+    print("%-26s %-22s %-22s %-8s %-6s %-40s %s" % ("Flow", "Inner src", "Inner dst", "Path",
+                                                   "VNI", "Outer (VTEP) header", "Via"))
     for c in convs:
         if args.flow and args.flow not in c.flow:
             continue
@@ -427,9 +433,9 @@ def cmd_paths(args) -> int:
         seen.add(key)
         p = c.path
         outer = "%s -> %s udp %d->4789" % (p.vtep_src, p.vtep_dst, p.outer_sport) if p.vtep_src else "-"
-        print("%-26s %-22s %-22s %-8s %-6s %-9s %s" % (
+        print("%-26s %-22s %-22s %-8s %-6s %-40s %s" % (
             c.flow[:26], "%s:%d" % (c.src.ip, c.sport), "%s:%d" % (c.dst.ip, c.dport), p.kind,
-            p.vni or "-", p.spine or "-", outer))
+            p.vni or "-", outer, " > ".join(p.via) or "-"))
     return 0
 
 
@@ -601,7 +607,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="vxlanlab",
                                  description="Simulated VXLAN EVPN fabric that exports sFlow to Kentik.")
     ap.add_argument("--version", action="version", version=__version__)
-    ap.add_argument("--topology", default=DEFAULT_TOPOLOGY, help="topology JSON (default: built-in)")
+    ap.add_argument("--topology", "-t", default=os.environ.get("VXLANLAB_TOPOLOGY") or "3tier",
+                    help="built-in topology (%s) or a topology JSON file. Default 3tier, or env "
+                    "VXLANLAB_TOPOLOGY" % ", ".join(TOPOLOGIES))
     sub = ap.add_subparsers(dest="cmd")
 
     r = sub.add_parser("run", help="start the fabric and send sFlow to a collector")
@@ -651,10 +659,11 @@ def main(argv=None) -> int:
     ko.add_argument("--plan-id", type=int, default=_env_int("KENTIK_PLAN_ID"), help="plan ID (env KENTIK_PLAN_ID)")
     ko.add_argument("--site-id", type=int, default=_env_int("KENTIK_SITE_ID"), help="site ID (env KENTIK_SITE_ID)")
     ko.add_argument("--site-name", default=os.environ.get("KENTIK_SITE_NAME"),
-                    help="put the devices in this site, creating it (data center, with Border/Spine/Leaf "
-                    "layers) if no site has this title (env KENTIK_SITE_NAME)")
+                    help="put the devices in this site, creating it (data center, one layer per tier: "
+                    "Border/Spine/Leaf, or Edge/Superspine/Spine/Leaf/Top of Rack for 5stage) if no site "
+                    "has this title (env KENTIK_SITE_NAME)")
     ko.add_argument("--no-layers", action="store_true",
-                    help="don't put the devices into the site's Border/Spine/Leaf layers")
+                    help="don't put the devices into the site's layers")
     ko.add_argument("--agent-id", default=os.environ.get("KENTIK_AGENT_ID"),
                     help="Universal Agent ID that polls the devices (env KENTIK_AGENT_ID)")
     ko.add_argument("--credential",
