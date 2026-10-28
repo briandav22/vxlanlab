@@ -1,0 +1,15 @@
+subnet,segment,tenant_vrf,role,vlan,vni,zone,notes
+10.10.1.0/24,pay-web,PAYMENTS,web,10,10010,overlay,web-01 .21 (tor_a) web-02 .22 (tor_b) web-03 .23 (tor_e)
+10.10.2.0/24,pay-db,PAYMENTS,db,20,10020,overlay,db-01 .45 (tor_c) db-02 .46 (tor_f)
+10.10.5.0/24,pay-backup,PAYMENTS,backup,25,10025,overlay,backup-01 .50 (tor_g)
+10.20.3.0/24,anl-etl,ANALYTICS,etl,30,20030,overlay,etl-01 .30 (tor_d) etl-02 .31 (tor_h)
+10.20.4.0/24,anl-lake,ANALYTICS,lake,40,20040,overlay,lake-01 .40 (tor_b) lake-02 .41 (tor_g)
+10.50.12.0/24,branch-12,PAYMENTS,branch,,50010,external,Branch users via SD-WAN; routed in L3 VNI 50010
+203.0.113.0/24,internet,PAYMENTS,internet,,50010,external,Internet customers; enter at edge_a/edge_b
+192.0.2.0/24,internet,PAYMENTS,internet,,50010,external,Internet customers; enter at edge_a/edge_b
+10.255.1.0/24,vtep-5stage,UNDERLAY,vtep,,,underlay,5-stage VTEPs: edge .1-.2 and tor_a-h .41-.48 (outer VXLAN headers)
+10.0.1.0/24,loopback-5stage,UNDERLAY,loopback,,,underlay,5-stage superspine/spine/leaf loopbacks (not in flow headers)
+192.168.251.0/24,mgmt-5stage,UNDERLAY,mgmt,,,mgmt,5-stage sFlow sending / SNMP IPs
+10.255.0.0/24,vtep-3tier,UNDERLAY,vtep,,,underlay,3-tier VTEPs: leaf-01..03 .11-.13 and border-leaf .14
+10.0.0.0/24,loopback-3tier,UNDERLAY,loopback,,,underlay,3-tier spine loopbacks (not in flow headers)
+192.168.250.0/24,mgmt-3tier,UNDERLAY,mgmt,,,mgmt,3-tier sFlow sending / SNMP IPs
